@@ -63,11 +63,23 @@ function isThinkingEvent(event) {
   return message?.type === 'thinking' || message?.type === 'reasoning' || event?.type === 'thinking' || event?.type === 'reasoning'
 }
 
+// Cursor exposes DSH custom tools to the model through a synthetic MCP server
+// ("custom-user-tools") invoked via a meta tool literally named "mcp". Those
+// wire-level wrapper calls must never be forwarded to DSH: real custom-tool
+// invocations arrive through the in-process execute() callback, and discovery
+// calls are handled inside the SDK.
+const META_TOOL_NAMES = new Set(['mcp', 'getmcptools', 'callmcptool'])
+
+function isMetaToolName(name) {
+  return META_TOOL_NAMES.has(String(name ?? '').toLowerCase())
+}
+
 function toolCallsFromEvent(event) {
   const message = unwrapSdkMessage(event)
   if (!message) return []
   const calls = []
-  if (message.type === 'tool_call' && message.status !== 'completed' && message.status !== 'error' && message.name) {
+  if (message.type === 'tool_call' && message.status !== 'completed' && message.status !== 'error'
+    && message.name && !isMetaToolName(message.name)) {
     calls.push({
       id: String(message.call_id ?? message.id ?? `call_${crypto.randomUUID()}`),
       name: message.name,
@@ -78,6 +90,7 @@ function toolCallsFromEvent(event) {
   if (!Array.isArray(content)) return calls
   for (const block of content) {
     if (block?.type !== 'tool_use' && block?.type !== 'tool-call') continue
+    if (isMetaToolName(block.name)) continue
     calls.push({
       id: String(block.id ?? `call_${crypto.randomUUID()}`),
       name: block.name,
