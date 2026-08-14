@@ -231,7 +231,7 @@ export function createOAuthController(hooks) {
     }
   }
 
-  return { publicStatus, startLogin, logout, port: 3080 }
+  return { publicStatus, startLogin, logout }
 }
 
 export function createOAuthHandler(oauth) {
@@ -288,7 +288,6 @@ export function createOAuthHandler(oauth) {
 }
 
 export function registerOAuthRoutes(ctx, oauth) {
-  oauth.port = ctx.webServer.port
   return ctx.webServer.register({
     kind: 'prefix',
     path: '/oauth',
@@ -296,18 +295,13 @@ export function registerOAuthRoutes(ctx, oauth) {
   })
 }
 
-function loginPage(oauth) {
-  return `http://127.0.0.1:${oauth.port ?? 3080}/oauth`
-}
-
 async function runLogin(oauth, force) {
-  const page = loginPage(oauth)
   if (!force) {
     const status = await oauth.publicStatus()
     if (status.status === 'logged-in') {
       return {
         kind: 'success',
-        text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 ${page}`,
+        text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 /oauth`,
       }
     }
   }
@@ -315,7 +309,7 @@ async function runLogin(oauth, force) {
     await oauth.startLogin()
     return {
       kind: 'success',
-      text: `已打开 Cursor 登录页。完成后回到 DSH 即可。状态页：${page}`,
+      text: '已打开 Cursor 登录页。完成后回到 DSH 即可。状态页：/oauth',
     }
   } catch (error) {
     return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
@@ -335,7 +329,6 @@ export function registerOAuthCommand(ctx, oauth) {
     input: { hint: '[status | again]' },
     async handler(invocation) {
       const action = commandAction(invocation.rawInput)
-      const page = loginPage(oauth)
       if (action === 'logout') {
         await oauth.logout()
         return { kind: 'success', text: '已退出 Cursor 登录。' }
@@ -345,10 +338,10 @@ export function registerOAuthCommand(ctx, oauth) {
         if (status.status === 'logged-in') {
           return {
             kind: 'success',
-            text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 ${page}`,
+            text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 /oauth`,
           }
         }
-        return { kind: 'success', text: `Cursor 未登录。输入 /login 开始登录，或打开 ${page}` }
+        return { kind: 'success', text: 'Cursor 未登录。输入 /login 开始登录，或打开 /oauth' }
       }
       return await runLogin(oauth, action === 'again')
     },

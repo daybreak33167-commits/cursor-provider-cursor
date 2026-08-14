@@ -19,7 +19,7 @@ The bundle sets the default model to `cursor / composer-2.5`. Change it in **Set
 
 Preferred: in the DSH composer run `/login`. That opens the official Cursor login page in the browser and writes the minted key into DSH as `CURSOR_API_KEY`. `/logout` signs out. `/login status` shows the current session.
 
-You can also open [http://127.0.0.1:3080/oauth](http://127.0.0.1:3080/oauth) and click **使用 Cursor 登录**.
+You can also open `/oauth` and click **使用 Cursor 登录**.
 
 Resolve order after that:
 
