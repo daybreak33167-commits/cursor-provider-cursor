@@ -134,28 +134,17 @@ export function createOAuthController(hooks) {
 
   async function publicStatus() {
     const sdk = await Cursor.auth.status().catch(() => ({ status: 'logged-out' }))
-    const credentials = hooks.getCredentials?.()
-    const ref = hooks.getApiKeyEnv()
-    const stored = credentials ? await credentials.describe?.(ref).catch(() => undefined) : undefined
+    const accounts = await hooks.accounts?.list?.().catch(() => []) ?? []
+    const primary = accounts.find((account) => !account.disabled) ?? accounts[0]
     return {
-      status: sdk.status,
-      email: sdk.email,
-      expiresAt: sdk.apiKeyExpiresAtMs,
-      dshCredential: stored?.configured === true,
+      status: accounts.length > 0 ? 'logged-in' : sdk.status,
+      email: primary?.email || sdk.email,
+      expiresAt: primary?.expiresAt ?? sdk.apiKeyExpiresAtMs,
+      accounts,
+      dshCredential: accounts.length > 0,
       phase: state.phase,
       loginUrl: state.phase === 'waiting' ? state.loginUrl : undefined,
       error: state.phase === 'error' ? state.error : undefined,
-    }
-  }
-
-  async function persistKey(apiKey) {
-    const credentials = hooks.getCredentials?.()
-    const ref = hooks.getApiKeyEnv()
-    if (!credentials?.set || !apiKey) return
-    try {
-      await credentials.set(ref, apiKey)
-    } catch (error) {
-      hooks.logger?.warn?.(`llm-cursor oauth: could not write DSH credential ${ref}: ${error instanceof Error ? error.message : error}`)
     }
   }
 
@@ -191,7 +180,14 @@ export function createOAuthController(hooks) {
     }).then(async (result) => {
       state.phase = 'done'
       state.loginUrl = undefined
-      await persistKey(result.apiKey)
+      if (result?.apiKey && hooks.accounts) {
+        const sdk = await Cursor.auth.status().catch(() => undefined)
+        await hooks.accounts.add({
+          email: result.email ?? sdk?.email ?? '',
+          apiKey: result.apiKey,
+          expiresAt: result.apiKeyExpiresAtMs ?? sdk?.apiKeyExpiresAtMs,
+        })
+      }
       return result
     }).catch((error) => {
       if (controller.signal.aborted) {
@@ -214,24 +210,28 @@ export function createOAuthController(hooks) {
     return { loginUrl, alreadyStarted: false }
   }
 
-  async function logout() {
+  // Without an email this signs out every account; with one it removes just
+  // that account. The SDK's own stored session is cleared only when it
+  // belongs to the account being removed.
+  async function logout(email) {
     state.controller?.abort()
     state.phase = 'idle'
     state.loginUrl = undefined
     state.error = undefined
-    await Cursor.auth.logout().catch(() => {})
-    const credentials = hooks.getCredentials?.()
-    const ref = hooks.getApiKeyEnv()
-    if (credentials?.unset) {
-      try {
-        await credentials.unset(ref)
-      } catch (error) {
-        hooks.logger?.warn?.(`llm-cursor oauth: could not unset DSH credential ${ref}: ${error instanceof Error ? error.message : error}`)
-      }
+    const removed = await hooks.accounts?.remove?.(email).catch(() => 0) ?? 0
+    const sdk = await Cursor.auth.status().catch(() => undefined)
+    if (!email || (sdk?.email && sdk.email === email)) {
+      await Cursor.auth.logout().catch(() => {})
     }
+    return removed
   }
 
-  return { publicStatus, startLogin, logout }
+  function setAccountDisabled(email, disabled) {
+    if (!hooks.accounts) throw new Error('Cursor account store unavailable')
+    return hooks.accounts.setDisabled(email, disabled)
+  }
+
+  return { publicStatus, startLogin, logout, setAccountDisabled }
 }
 
 export function createOAuthHandler(oauth) {

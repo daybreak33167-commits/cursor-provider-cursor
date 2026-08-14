@@ -1,4 +1,5 @@
 import { importHost } from '../host.js'
+import { createAccountStore } from './accounts.js'
 import { createCursorAdapterClass } from './adapter.js'
 import { createOAuthController, registerOAuthRoutes } from './oauth.js'
 
@@ -33,9 +34,22 @@ export function applyCursor(ctx, { llm, options }) {
   const { LlmAdapter, LlmError, CallId, ReasoningEffortId, assertUsableApiKey } = llm
   const CursorAdapter = createCursorAdapterClass({ LlmAdapter, LlmError, CallId, ReasoningEffortId })
 
+  const accounts = createAccountStore({
+    getCredentials: () => ctx.get?.('credentials'),
+    getApiKeyEnv: () => options().apiKeyEnv,
+    logger: ctx.logger,
+  })
+
   const adapter = new CursorAdapter({
     options,
-    resolveApiKey: (connection) => resolveApiKey(ctx, connection, assertUsableApiKey),
+    // Rotate across stored accounts; fall back to the single-key resolution
+    // (credential / launch env / process env) when the store is empty.
+    resolveApiKey: async (connection, { advance = true } = {}) => {
+      const picked = await accounts.pick({ advance })
+      if (picked?.apiKey) return picked.apiKey
+      return resolveApiKey(ctx, connection, assertUsableApiKey)
+    },
+    reportAuthFailure: (apiKey) => accounts.reportAuthFailure(apiKey),
     resolveAttachments: () => ctx.get?.('attachments'),
   })
   ctx.llm.registerAdapter([CURSOR_PROVIDER], adapter)
@@ -43,9 +57,10 @@ export function applyCursor(ctx, { llm, options }) {
   const oauth = createOAuthController({
     getApiKeyEnv: () => options().apiKeyEnv,
     getCredentials: () => ctx.get?.('credentials'),
+    accounts,
     logger: ctx.logger,
   })
   ctx.inject(['webServer'], (webCtx) => registerOAuthRoutes(webCtx, oauth))
 
-  return { oauth }
+  return { oauth, accounts }
 }

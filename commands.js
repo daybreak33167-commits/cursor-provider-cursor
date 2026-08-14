@@ -22,15 +22,29 @@ const LOGIN_ALIASES = {
   iflow: 'iflow',
 }
 
+function tokensOf(rawInput) {
+  const raw = String(rawInput ?? '').trim()
+  if (!raw || raw.startsWith('[')) return []
+  return raw.split(/\s+/)
+}
+
 function parseAction(rawInput) {
-  const action = String(rawInput ?? '').trim().toLowerCase()
-  if (!action || action.startsWith('[')) return ''
-  return action.split(/\s+/)[0]
+  return (tokensOf(rawInput)[0] ?? '').toLowerCase()
 }
 
 async function cursorLogin(oauth, force) {
   if (!force) {
     const status = await oauth.publicStatus()
+    const accounts = status.accounts ?? []
+    if (accounts.length > 0) {
+      const names = accounts.map((account) => account.email || '未知邮箱').join('、')
+      return {
+        kind: 'success',
+        text: `Cursor 已有 ${accounts.length} 个账号（${names}），新会话自动轮询。`
+          + '\n/login again 添加另一个账号（先在浏览器退出 cursor.com 或用隐身窗口）；'
+          + '/logout cursor <邮箱> 退出单个账号',
+      }
+    }
     if (status.status === 'logged-in') {
       return {
         kind: 'success',
@@ -60,9 +74,17 @@ async function statusSummary({ cursorOauth, subscriptions }) {
   const overview = await subscriptions.overview()
 
   const cursor = overview.cursor
-  lines.push(cursor?.status === 'logged-in'
-    ? `Cursor：已登录${cursor.email ? `（${cursor.email}）` : ''}`
-    : 'Cursor：未登录（/login cursor）')
+  const cursorAccounts = cursor?.accounts ?? []
+  if (cursorAccounts.length > 0) {
+    const names = cursorAccounts
+      .map((account) => `${account.email || '未知邮箱'}${account.disabled ? '（停用）' : account.expired ? '（过期）' : ''}`)
+      .join('、')
+    lines.push(`Cursor：${cursorAccounts.length} 个账号轮询（${names}）`)
+  } else {
+    lines.push(cursor?.status === 'logged-in'
+      ? `Cursor：已登录${cursor.email ? `（${cursor.email}）` : ''}`
+      : 'Cursor：未登录（/login cursor）')
+  }
 
   const proxy = overview.proxy
   const phaseText = {
@@ -133,17 +155,24 @@ export function registerSubscriptionCommands(ctx, { cursorOauth, subscriptions }
     description: 'Sign out of a subscription',
     input: { hint: '[cursor | claude-code | codex | ...]' },
     async handler(invocation) {
-      const action = parseAction(invocation.rawInput)
+      const tokens = tokensOf(invocation.rawInput)
+      const action = (tokens[0] ?? '').toLowerCase()
       try {
         if (!action || action === 'cursor') {
-          await cursorOauth.logout()
-          return { kind: 'success', text: '已退出 Cursor 登录。' }
+          const email = tokens[1]
+          const removed = await cursorOauth.logout(email)
+          return {
+            kind: 'success',
+            text: email
+              ? (removed > 0 ? `已退出 Cursor 账号 ${email}。` : `Cursor 没有账号 ${email}。`)
+              : `已退出 Cursor 登录${removed > 1 ? `（${removed} 个账号）` : ''}。`,
+          }
         }
         const providerId = LOGIN_ALIASES[action]
         if (!providerId) {
           return { kind: 'error', text: `未知提供商 "${action}"。` }
         }
-        const result = await subscriptions.logout(providerId)
+        const result = await subscriptions.logout(providerId, tokens[1])
         const removed = Array.isArray(result?.removed) ? result.removed : []
         return {
           kind: 'success',

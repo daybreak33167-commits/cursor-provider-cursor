@@ -157,14 +157,14 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
 
   async function logout(providerId, name) {
     if (providerId === 'cursor') {
-      await cursorOauth.logout()
-      return { removed: 'cursor' }
+      const removed = await cursorOauth.logout(name)
+      return { removed: name ? [name] : [`cursor (${removed} 个账号)`] }
     }
     const files = await mgmt.authFiles()
     const matches = files.filter((file) => (
       providerForChannel(file.provider) === providerId
       && file.source !== 'memory'
-      && (!name || file.name === name)
+      && (!name || file.name === name || file.email === name)
     ))
     for (const file of matches) {
       await mgmt.deleteAuthFile(file.name)
@@ -173,7 +173,16 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
     return { removed: matches.map((file) => file.name) }
   }
 
-  return { overview, login, loginStatus, logout, plugins }
+  async function setAccountDisabled(providerId, name, disabled) {
+    if (providerId === 'cursor') {
+      await cursorOauth.setAccountDisabled(name, disabled)
+      return
+    }
+    await mgmt.setAuthFileDisabled(name, disabled)
+    catalog.invalidate()
+  }
+
+  return { overview, login, loginStatus, logout, setAccountDisabled, plugins }
 }
 
 export function createSubscriptionsHandler(controller, { supervisor, mgmt, catalog }) {
@@ -216,8 +225,11 @@ export function createSubscriptionsHandler(controller, { supervisor, mgmt, catal
       }
       if (path === '/subscriptions/api/account' && method === 'POST') {
         const body = await readBody(req)
-        await mgmt.setAuthFileDisabled(String(body.name ?? ''), body.disabled === true)
-        catalog.invalidate()
+        await controller.setAccountDisabled(
+          String(body.provider ?? ''),
+          String(body.name ?? ''),
+          body.disabled === true,
+        )
         json(res, 200, { ok: true })
         return
       }
@@ -253,33 +265,63 @@ function renderSubscriptionsPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>订阅 · DSH</title>
   <style>
-    :root { color-scheme: dark; }
+    :root { color-scheme: light dark; }
+    body {
+      --bg: rgb(249, 250, 251); --card: #fff; --text: rgb(21, 21, 23);
+      --muted: rgb(97, 102, 107); --faint: rgb(129, 133, 140);
+      --border: rgba(0, 0, 0, .1); --row: rgba(0, 0, 0, .06);
+      --accent: rgb(65, 118, 230);
+      --ok: rgb(34, 197, 94); --warn: rgb(221, 134, 41); --err: rgb(236, 19, 19);
+      --btn: #fff; --btn-border: rgba(0, 0, 0, .14);
+      --tab-active: rgb(235, 238, 242); --tab-border: rgba(0, 0, 0, .18);
+      --code: rgba(0, 0, 0, .06);
+    }
+    @media (prefers-color-scheme: dark) {
+      body {
+        --bg: rgb(21, 21, 23); --card: rgb(35, 35, 36); --text: rgb(249, 250, 251);
+        --muted: rgb(207, 211, 214); --faint: rgb(151, 157, 166);
+        --border: rgba(255, 255, 255, .12); --row: rgba(255, 255, 255, .08);
+        --accent: rgb(86, 134, 254);
+        --ok: rgb(78, 209, 126); --warn: rgb(247, 173, 49); --err: rgb(242, 90, 90);
+        --btn: rgb(67, 69, 74); --btn-border: rgba(255, 255, 255, .16);
+        --tab-active: rgb(53, 54, 56); --tab-border: rgba(255, 255, 255, .2);
+        --code: rgba(255, 255, 255, .1);
+      }
+    }
     body { margin: 0; padding: 32px 16px; min-height: 100vh;
-      font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; background: #111214; color: #ececec; }
-    main { max-width: 760px; margin: 0 auto; }
+      font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 800px; margin: 0 auto; }
     h1 { font-size: 22px; margin: 0 0 4px; }
-    .sub { color: #9a9aa2; margin: 0 0 20px; }
-    .card { border: 1px solid #2a2b2f; border-radius: 14px; background: #18191c; padding: 16px 18px; margin-bottom: 14px; }
+    .sub { color: var(--muted); margin: 0 0 18px; }
+    .card { border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 16px 18px; margin-bottom: 14px; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
     .title { font-weight: 600; font-size: 15px; }
-    .muted { color: #9a9aa2; font-size: 13px; }
-    .ok { color: #8ee59b; } .warn { color: #ffce73; } .err { color: #ff8d85; }
-    button { padding: 7px 13px; border-radius: 9px; border: 1px solid #3a3b40; background: #26272b;
-      color: #ececec; font: inherit; cursor: pointer; }
-    button.primary { background: #4f8cff; border-color: #4f8cff; color: #fff; font-weight: 600; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .faint { color: var(--faint); font-size: 12px; margin-top: 8px; word-break: break-all; }
+    .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+    button { padding: 7px 13px; border-radius: 9px; border: 1px solid var(--btn-border); background: var(--btn);
+      color: var(--text); font: inherit; cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    button.small { padding: 3px 10px; border-radius: 8px; font-size: 12px; }
     button:disabled { opacity: .5; cursor: default; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+    .tabs button { padding: 5px 14px; border-radius: 999px; border: 1px solid transparent;
+      background: transparent; color: var(--muted); font-size: 13px; }
+    .tabs button.active { border-color: var(--tab-border); background: var(--tab-active); color: var(--text); font-weight: 600; }
     .accounts { margin: 10px 0 0; padding: 0; list-style: none; }
     .accounts li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
-      padding: 7px 0; border-top: 1px solid #232428; font-size: 13px; }
-    code { color: #d7d7d7; background: #202126; border-radius: 6px; padding: 1px 6px; }
-    .models { color: #7f8188; font-size: 12px; margin-top: 6px; word-break: break-all; }
+      padding: 8px 0; border-top: 1px solid var(--row); font-size: 13px; flex-wrap: wrap; }
+    .accounts .meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .accounts .actions { display: flex; align-items: center; gap: 6px; }
+    .stats { color: var(--faint); font-size: 12px; }
+    code { color: var(--text); background: var(--code); border-radius: 6px; padding: 1px 6px; }
     #pending { position: fixed; right: 16px; bottom: 16px; max-width: 340px; }
   </style>
 </head>
 <body>
   <main>
     <h1>订阅</h1>
-    <p class="sub">通过 OAuth 复用你的 AI 编码订阅。管理密钥保存在 DSH 服务端，不会下发到浏览器。</p>
+    <p class="sub">通过 OAuth 复用你的 AI 编码订阅。同一供应商可添加多个账号，请求自动轮询负载均衡。</p>
     <div id="app">加载中…</div>
   </main>
   <div id="pending"></div>
@@ -287,12 +329,22 @@ function renderSubscriptionsPage() {
     const app = document.getElementById('app');
     const pendingBox = document.getElementById('pending');
     let pendingLogin = null;
+    let currentTab = null;
+    let lastData = null;
 
     async function api(path, options) {
       const res = await fetch(path, { headers: { accept: 'application/json' }, ...options });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || res.status);
       return data;
+    }
+
+    function post(path, body) {
+      return api(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
     }
 
     function el(tag, attrs, ...children) {
@@ -320,18 +372,15 @@ function renderSubscriptionsPage() {
 
     async function doLogin(provider) {
       try {
-        const started = await api('/subscriptions/api/login', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ provider }),
-        });
+        const started = await post('/subscriptions/api/login', { provider });
         if (started.kind === 'cursor') {
           pendingLogin = { provider: 'cursor' };
           notify('已打开 Cursor 登录页，完成后本页会自动刷新。');
+          setTimeout(refresh, 5000);
           return;
         }
         pendingLogin = { provider, state: started.state };
-        let text = '已打开 ' + provider + ' 登录页。';
+        let text = '已打开登录页。';
         if (started.userCode) text += ' 设备码：' + started.userCode;
         notify(text + ' 等待授权完成…');
         pollLogin();
@@ -368,79 +417,143 @@ function renderSubscriptionsPage() {
       if (!isError) setTimeout(() => pendingBox.replaceChildren(), 8000);
     }
 
-    async function doLogout(provider, name) {
-      if (!confirm('确定要退出该账号吗？')) return;
+    async function doLogout(provider, name, label) {
+      if (!confirm('确定退出 ' + label + ' 吗？')) return;
       try {
-        await api('/subscriptions/api/logout', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ provider, name }),
-        });
+        await post('/subscriptions/api/logout', { provider, name });
         refresh();
       } catch (error) {
         notify('退出失败：' + error.message, true);
       }
     }
 
-    function render(data) {
-      const [phaseText, phaseClass] = phaseLabel(data.proxy);
-      const proxyCard = el('div', { class: 'card' },
-        el('div', { class: 'row' },
-          el('div', {},
-            el('div', { class: 'title' }, 'CLIProxyAPI'),
-            el('div', { class: 'muted' },
-              (data.proxy.mode === 'managed' ? '托管模式' : '外部模式') + ' · ' + data.proxy.baseUrl
-              + (data.proxy.version ? ' · v' + data.proxy.version : '')
-              + (data.proxy.pid ? ' · pid ' + data.proxy.pid : '')),
-            el('div', { class: phaseClass }, phaseText + (data.proxy.error ? '：' + data.proxy.error : ''))),
-          el('button', { onclick: () => api('/subscriptions/api/proxy/restart', { method: 'POST' }).then(refresh) }, '重启代理')));
+    async function doToggle(provider, name, disabled) {
+      try {
+        await post('/subscriptions/api/account', { provider, name, disabled });
+        refresh();
+      } catch (error) {
+        notify('操作失败：' + error.message, true);
+      }
+    }
 
-      const cursorLoggedIn = data.cursor.status === 'logged-in';
-      const cursorCard = el('div', { class: 'card' },
+    function tabsOf(data) {
+      const cursorCount = (data.cursor.accounts || []).length || (data.cursor.status === 'logged-in' ? 1 : 0);
+      const tabs = [{ id: 'cursor', label: 'Cursor', count: cursorCount }];
+      for (const provider of data.providers) {
+        if (provider.id === 'cliproxy' && provider.accounts.length === 0 && provider.models.length === 0) continue;
+        tabs.push({ id: provider.id, label: provider.label, count: provider.accounts.length });
+      }
+      return tabs;
+    }
+
+    function cursorPanel(data) {
+      const accounts = data.cursor.accounts || [];
+      const count = accounts.length;
+      const rows = accounts.map((account) => {
+        const label = account.email || '未知邮箱';
+        const dotClass = account.disabled || account.coolingDown ? 'warn' : account.expired ? 'err' : 'ok';
+        const dot = account.disabled ? '⏸ ' : account.expired ? '✕ ' : '● ';
+        const meta = el('span', { class: 'meta' },
+          el('span', { class: dotClass }, dot),
+          el('span', {}, label));
+        if (account.expired) meta.append(el('span', { class: 'err' }, '密钥已过期，重新添加即可'));
+        if (account.coolingDown) meta.append(el('span', { class: 'warn' }, '鉴权失败冷却中'));
+        if (account.disabled) meta.append(el('span', { class: 'warn' }, '已停用'));
+        return el('li', {},
+          meta,
+          el('span', { class: 'actions' },
+            el('button', { class: 'small', onclick: () => doToggle('cursor', account.email, !account.disabled) },
+              account.disabled ? '启用' : '停用'),
+            el('button', { class: 'small', onclick: () => doLogout('cursor', account.email, 'Cursor · ' + label) }, '退出')));
+      });
+      return el('div', { class: 'card' },
         el('div', { class: 'row' },
           el('div', {},
             el('div', { class: 'title' }, 'Cursor'),
-            el('div', { class: cursorLoggedIn ? 'ok' : 'muted' },
-              cursorLoggedIn ? '已登录' + (data.cursor.email ? ' · ' + data.cursor.email : '') : '未登录')),
-          cursorLoggedIn
-            ? el('button', { onclick: () => doLogout('cursor') }, '退出')
-            : el('button', { class: 'primary', onclick: () => doLogin('cursor') }, '登录')));
+            el('div', { class: 'muted' }, count > 0 ? count + ' 个账号 · 新会话自动轮询' : '未登录')),
+          el('button', { class: count === 0 ? 'primary' : '', onclick: () => doLogin('cursor') },
+            count > 0 ? '添加账号' : '登录')),
+        rows.length > 0 ? el('ul', { class: 'accounts' }, ...rows) : null,
+        el('div', { class: 'faint' },
+          '添加另一个账号前，先在浏览器退出 cursor.com（或用隐身窗口）再授权；同一邮箱重复登录只会刷新密钥。'));
+    }
 
-      const providerCards = data.providers.map((provider) => {
-        const hasAccounts = provider.accounts.length > 0;
-        const canLogin = provider.canLogin;
-        const actions = [];
-        if (canLogin) {
-          actions.push(el('button', { class: hasAccounts ? '' : 'primary', onclick: () => doLogin(provider.id) },
-            hasAccounts ? '再登录一个账号' : '登录'));
+    function providerPanel(provider) {
+      const count = provider.accounts.length;
+      const rows = provider.accounts.map((account) => {
+        const label = account.email || account.name;
+        const dotClass = account.disabled ? 'warn' : account.unavailable ? 'err' : 'ok';
+        const dot = account.disabled ? '⏸ ' : account.unavailable ? '✕ ' : '● ';
+        const meta = el('span', { class: 'meta' },
+          el('span', { class: dotClass }, dot),
+          el('span', {}, label));
+        if (account.status) meta.append(el('span', { class: 'muted' }, account.status));
+        if (account.disabled) meta.append(el('span', { class: 'warn' }, '已停用'));
+        if (account.success || account.failed) {
+          meta.append(el('span', { class: 'stats' }, '成功 ' + (account.success || 0) + ' · 失败 ' + (account.failed || 0)));
         }
-        const accountRows = provider.accounts.map((account) => el('li', {},
-          el('span', {},
-            el('span', { class: account.unavailable || account.disabled ? 'err' : 'ok' }, account.disabled ? '⏸ ' : '● '),
-            (account.email || account.name),
-            ' ',
-            el('span', { class: 'muted' }, account.status || '')),
-          el('button', { onclick: () => doLogout(provider.id, account.name) }, '退出')));
-        return el('div', { class: 'card' },
-          el('div', { class: 'row' },
-            el('div', {},
-              el('div', { class: 'title' }, provider.label),
-              el('div', { class: 'muted' },
-                hasAccounts ? provider.accounts.length + ' 个账号' : (canLogin ? '未登录' : '需要 CLIProxyAPI 插件支持'))),
-            el('div', {}, ...actions)),
-          hasAccounts ? el('ul', { class: 'accounts' }, ...accountRows) : null,
-          provider.models.length > 0
-            ? el('div', { class: 'models' }, '模型：' + provider.models.slice(0, 12).join(', ')
-              + (provider.models.length > 12 ? ' 等 ' + provider.models.length + ' 个' : ''))
-            : null);
+        return el('li', {},
+          meta,
+          el('span', { class: 'actions' },
+            el('button', { class: 'small', onclick: () => doToggle(provider.id, account.name, !account.disabled) },
+              account.disabled ? '启用' : '停用'),
+            el('button', { class: 'small', onclick: () => doLogout(provider.id, account.name, provider.label + ' · ' + label) }, '退出')));
       });
+
+      return el('div', { class: 'card' },
+        el('div', { class: 'row' },
+          el('div', {},
+            el('div', { class: 'title' }, provider.label),
+            el('div', { class: 'muted' },
+              count > 0
+                ? count + ' 个账号 · 请求自动轮询'
+                : provider.canLogin
+                  ? '未登录' + (provider.flow === 'device' ? ' · 设备码流程' : '')
+                  : '需要先在 CLIProxyAPI 插件商店安装对应插件')),
+          provider.canLogin
+            ? el('button', { class: count === 0 ? 'primary' : '', onclick: () => doLogin(provider.id) },
+              count > 0 ? '添加账号' : '登录')
+            : null),
+        rows.length > 0 ? el('ul', { class: 'accounts' }, ...rows) : null,
+        provider.models.length > 0
+          ? el('div', { class: 'faint' }, '模型 ' + provider.models.length + ' 个：'
+            + provider.models.slice(0, 12).join(', ') + (provider.models.length > 12 ? ' …' : ''))
+          : null);
+    }
+
+    function render(data) {
+      lastData = data;
+      const [phaseText, phaseClass] = phaseLabel(data.proxy);
+      const proxyStrip = el('div', { class: 'card' },
+        el('div', { class: 'row' },
+          el('div', {},
+            el('span', { class: 'title' }, 'CLIProxyAPI'),
+            el('span', { class: 'muted', style: 'margin-left:10px' },
+              (data.proxy.mode === 'managed' ? '托管' : '外部') + ' · ' + data.proxy.baseUrl
+              + (data.proxy.version ? ' · v' + data.proxy.version : '')),
+            el('span', { class: phaseClass, style: 'margin-left:10px;font-size:13px' },
+              phaseText + (data.proxy.error ? '：' + data.proxy.error : ''))),
+          el('button', { onclick: () => post('/subscriptions/api/proxy/restart').then(refresh) }, '重启代理')));
+
+      const tabs = tabsOf(data);
+      if (!currentTab || !tabs.some((tab) => tab.id === currentTab)) {
+        const active = tabs.find((tab) => tab.count > 0) || tabs[0];
+        currentTab = active.id;
+      }
+      const tabBar = el('div', { class: 'tabs' }, ...tabs.map((tab) => el('button', {
+        class: currentTab === tab.id ? 'active' : '',
+        onclick: () => { currentTab = tab.id; render(lastData); },
+      }, tab.count > 0 ? tab.label + ' (' + tab.count + ')' : tab.label)));
+
+      const provider = data.providers.find((entry) => entry.id === currentTab);
+      const panel = currentTab === 'cursor' ? cursorPanel(data) : provider ? providerPanel(provider) : null;
 
       const notes = [];
       if (data.managementError) {
         notes.push(el('div', { class: 'card' },
           el('span', { class: 'err' }, '管理 API 不可用：' + data.managementError)));
       }
-      app.replaceChildren(proxyCard, cursorCard, ...providerCards, ...notes);
+      app.replaceChildren(proxyStrip, tabBar, ...[panel, ...notes].filter(Boolean));
     }
 
     async function refresh() {

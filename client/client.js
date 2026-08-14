@@ -6,31 +6,37 @@ window.__ModuleLoader__.load({
     const react = require('react')
     const h = react.createElement
 
+    // Follow the host theme: DSH exposes design tokens as --dsw-* CSS
+    // variables on <body> (light by default, dark under [data-ds-dark-theme]).
+    const v = (name, fallback) => `var(${name}, ${fallback})`
     const palette = {
-      text: '#ececec',
-      muted: '#9a9aa2',
-      faint: '#7f8188',
-      ok: '#8ee59b',
-      warn: '#ffce73',
-      err: '#ff8d85',
-      cardBg: '#18191c',
-      cardBorder: '#2a2b2f',
-      rowBorder: '#232428',
-      accent: '#4f8cff',
-      buttonBg: '#26272b',
-      buttonBorder: '#3a3b40',
+      text: v('--dsw-alias-label-primary', 'rgb(21, 21, 23)'),
+      muted: v('--dsw-alias-label-secondary', 'rgb(97, 102, 107)'),
+      faint: v('--dsw-alias-label-tertiary', 'rgb(129, 133, 140)'),
+      ok: v('--dsw-alias-state-success-primary', 'rgb(34, 197, 94)'),
+      warn: v('--dsw-alias-state-warn-label', 'rgb(221, 134, 41)'),
+      err: v('--dsw-alias-state-error-primary', 'rgb(236, 19, 19)'),
+      cardBg: v('--dsw-alias-bg-layer-1', 'transparent'),
+      cardBorder: v('--dsw-alias-border-l2', 'rgba(0, 0, 0, 0.1)'),
+      rowBorder: v('--dsw-alias-border-l1', 'rgba(0, 0, 0, 0.06)'),
+      accent: v('--dsw-alias-button-info-fill', 'rgb(65, 118, 230)'),
+      buttonBg: v('--dsw-alias-button-elevated-fill', '#fff'),
+      buttonBorder: v('--dsw-alias-border-l3', 'rgba(0, 0, 0, 0.12)'),
+      tabActiveBg: v('--dsw-alias-button-ghost-active-fill', 'rgba(38, 49, 72, 0.08)'),
+      tabActiveBorder: v('--dsw-alias-button-ghost-active-border', 'rgba(0, 0, 0, 0.18)'),
+      codeBg: v('--dsw-alias-markdown-inline-code', 'rgba(0, 0, 0, 0.06)'),
     }
 
     const styles = {
-      root: { padding: '20px 24px 40px', maxWidth: 820, color: palette.text, font: '14px/1.6 ui-sans-serif, system-ui, sans-serif' },
+      root: { padding: '20px 24px 40px', maxWidth: 860, color: palette.text, fontSize: 14, lineHeight: 1.6 },
       headRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 4 },
       h1: { fontSize: 20, fontWeight: 700, margin: 0 },
-      sub: { color: palette.muted, margin: '0 0 18px', fontSize: 13 },
+      sub: { color: palette.muted, margin: '0 0 16px', fontSize: 13 },
       card: { border: `1px solid ${palette.cardBorder}`, borderRadius: 14, background: palette.cardBg, padding: '14px 16px', marginBottom: 12 },
       row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
       title: { fontWeight: 600, fontSize: 15 },
       muted: { color: palette.muted, fontSize: 13 },
-      faint: { color: palette.faint, fontSize: 12, marginTop: 6, wordBreak: 'break-all' },
+      faint: { color: palette.faint, fontSize: 12, marginTop: 8, wordBreak: 'break-all' },
       ok: { color: palette.ok },
       warn: { color: palette.warn },
       err: { color: palette.err },
@@ -42,11 +48,27 @@ window.__ModuleLoader__.load({
         padding: '6px 12px', borderRadius: 9, border: `1px solid ${palette.accent}`,
         background: palette.accent, color: '#fff', font: 'inherit', fontWeight: 600, cursor: 'pointer',
       },
+      smallButton: {
+        padding: '3px 10px', borderRadius: 8, border: `1px solid ${palette.buttonBorder}`,
+        background: palette.buttonBg, color: palette.text, font: 'inherit', fontSize: 12, cursor: 'pointer',
+      },
+      tabBar: { display: 'flex', flexWrap: 'wrap', gap: 6, margin: '2px 0 12px' },
+      tab: {
+        padding: '5px 14px', borderRadius: 999, border: '1px solid transparent',
+        background: 'transparent', color: palette.muted, font: 'inherit', fontSize: 13, cursor: 'pointer',
+      },
+      tabActive: {
+        border: `1px solid ${palette.tabActiveBorder}`, background: palette.tabActiveBg,
+        color: palette.text, fontWeight: 600,
+      },
       accountRow: {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
-        padding: '7px 0', borderTop: `1px solid ${palette.rowBorder}`, fontSize: 13,
+        padding: '8px 0', borderTop: `1px solid ${palette.rowBorder}`, fontSize: 13, flexWrap: 'wrap',
       },
-      code: { color: '#d7d7d7', background: '#202126', borderRadius: 6, padding: '1px 6px', fontFamily: 'ui-monospace, monospace' },
+      accountMeta: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+      accountActions: { display: 'flex', alignItems: 'center', gap: 6 },
+      stats: { color: palette.faint, fontSize: 12 },
+      code: { color: palette.text, background: palette.codeBg, borderRadius: 6, padding: '1px 6px', fontFamily: 'ui-monospace, monospace' },
       notice: { marginTop: 10, fontSize: 13 },
     }
 
@@ -79,12 +101,23 @@ window.__ModuleLoader__.load({
       return map[proxy?.phase] || [proxy?.phase || '未知', styles.muted]
     }
 
-    function Button({ primary, onClick, disabled, children }) {
+    function Button({ primary, small, onClick, disabled, children }) {
+      const base = small ? styles.smallButton : primary ? styles.primaryButton : styles.button
       return h('button', {
-        style: { ...primary ? styles.primaryButton : styles.button, ...disabled ? { opacity: 0.5, cursor: 'default' } : {} },
+        style: { ...base, ...disabled ? { opacity: 0.5, cursor: 'default' } : {} },
         disabled,
         onClick,
       }, children)
+    }
+
+    function tabsOf(data) {
+      const cursorCount = data.cursor?.accounts?.length ?? (data.cursor?.status === 'logged-in' ? 1 : 0)
+      const tabs = [{ id: 'cursor', label: 'Cursor', count: cursorCount }]
+      for (const provider of data.providers ?? []) {
+        if (provider.id === 'cliproxy' && provider.accounts.length === 0 && (provider.models?.length ?? 0) === 0) continue
+        tabs.push({ id: provider.id, label: provider.label, count: provider.accounts.length })
+      }
+      return tabs
     }
 
     function SubscriptionsSection() {
@@ -93,6 +126,7 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = react.useState(undefined)
       const [pending, setPending] = react.useState(undefined)
       const [busy, setBusy] = react.useState('')
+      const [tab, setTab] = react.useState(undefined)
       const aliveRef = react.useRef(true)
       const pendingRef = react.useRef(undefined)
       pendingRef.current = pending
@@ -118,6 +152,14 @@ window.__ModuleLoader__.load({
           clearInterval(timer)
         }
       }, [refresh])
+
+      // Pick the initial tab once: first provider that has accounts.
+      react.useEffect(() => {
+        if (tab || !data) return
+        const tabs = tabsOf(data)
+        const active = tabs.find((entry) => entry.count > 0) || tabs[0]
+        setTab(active.id)
+      }, [data, tab])
 
       react.useEffect(() => {
         if (!pending?.state) return undefined
@@ -177,7 +219,14 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const cancelLogin = async () => {
+        const current = pendingRef.current
+        setPending(undefined)
+        if (current?.state) await post('/subscriptions/api/login/cancel', { state: current.state }).catch(() => {})
+      }
+
       const logout = async (provider, name, label) => {
+        if (!window.confirm(`确定退出 ${label} 吗？`)) return
         setBusy(`logout:${provider}:${name ?? ''}`)
         try {
           await post('/subscriptions/api/logout', { provider, name })
@@ -185,6 +234,18 @@ window.__ModuleLoader__.load({
           await refresh()
         } catch (cause) {
           setNotice({ text: `退出失败：${cause.message}`, kind: 'err' })
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const toggleAccount = async (provider, name, disabled) => {
+        setBusy(`account:${name}`)
+        try {
+          await post('/subscriptions/api/account', { provider, name, disabled })
+          await refresh()
+        } catch (cause) {
+          setNotice({ text: `操作失败：${cause.message}`, kind: 'err' })
         } finally {
           setBusy('')
         }
@@ -209,7 +270,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', gap: 8 } },
             h(Button, { onClick: refresh }, '刷新'),
             h(Button, { onClick: () => window.open('/subscriptions', '_blank') }, '独立页面'))),
-        h('p', { style: styles.sub }, '通过 OAuth 复用 Cursor、Claude Code、Codex、Antigravity、Kimi、Grok 等订阅。登录凭证由本机 CLIProxyAPI 保管。'))
+        h('p', { style: styles.sub }, '通过 OAuth 复用你的 AI 编码订阅。同一供应商可添加多个账号，请求自动轮询负载均衡。'))
 
       if (error && !data) {
         return h('div', { style: styles.root }, header,
@@ -222,75 +283,136 @@ window.__ModuleLoader__.load({
       }
 
       const [phaseText, phaseStyle] = phaseDescriptor(data.proxy)
-      const proxyCard = h('div', { style: styles.card },
+      const proxyStrip = h('div', { style: styles.card },
         h('div', { style: styles.row },
           h('div', null,
-            h('div', { style: styles.title }, 'CLIProxyAPI 代理'),
-            h('div', { style: styles.muted },
-              `${data.proxy.mode === 'managed' ? '托管模式' : '外部模式'} · ${data.proxy.baseUrl}`
-              + (data.proxy.version ? ` · v${data.proxy.version}` : '')
-              + (data.proxy.pid ? ` · pid ${data.proxy.pid}` : '')),
-            h('div', { style: phaseStyle }, phaseText + (data.proxy.error ? `：${data.proxy.error}` : ''))),
+            h('span', { style: styles.title }, 'CLIProxyAPI'),
+            h('span', { style: { ...styles.muted, marginLeft: 10 } },
+              `${data.proxy.mode === 'managed' ? '托管' : '外部'} · ${data.proxy.baseUrl}`
+              + (data.proxy.version ? ` · v${data.proxy.version}` : '')),
+            h('span', { style: { ...phaseStyle, marginLeft: 10, fontSize: 13 } },
+              phaseText + (data.proxy.error ? `：${data.proxy.error}` : ''))),
           h(Button, { onClick: restartProxy, disabled: busy === 'proxy:restart' }, '重启代理')))
 
-      const cursorLoggedIn = data.cursor?.status === 'logged-in'
-      const cursorCard = h('div', { style: styles.card },
-        h('div', { style: styles.row },
-          h('div', null,
-            h('div', { style: styles.title }, 'Cursor'),
-            h('div', { style: cursorLoggedIn ? styles.ok : styles.muted },
-              cursorLoggedIn
-                ? `已登录${data.cursor.email ? ` · ${data.cursor.email}` : ''}`
-                : '未登录')),
-          cursorLoggedIn
-            ? h(Button, { onClick: () => logout('cursor', undefined, 'Cursor'), disabled: busy.startsWith('logout:cursor') }, '退出')
-            : h(Button, { primary: true, onClick: () => login('cursor', 'Cursor'), disabled: busy === 'login:cursor' }, '登录')))
+      const tabs = tabsOf(data)
+      const activeTab = tabs.some((entry) => entry.id === tab) ? tab : tabs[0].id
+      const tabBar = h('div', { style: styles.tabBar }, tabs.map((entry) => h('button', {
+        key: entry.id,
+        style: { ...styles.tab, ...(activeTab === entry.id ? styles.tabActive : {}) },
+        onClick: () => setTab(entry.id),
+      }, entry.count > 0 ? `${entry.label} (${entry.count})` : entry.label)))
 
-      const providerCards = (data.providers ?? []).map((provider) => {
-        const hasAccounts = provider.accounts.length > 0
-        const isPending = pending?.provider === provider.id
-        const accountRows = provider.accounts.map((account) => h('div', { key: account.name, style: styles.accountRow },
-          h('span', null,
-            h('span', { style: account.disabled || account.unavailable ? styles.err : styles.ok },
-              account.disabled ? '⏸ ' : '● '),
-            account.email || account.name,
-            ' ',
-            h('span', { style: styles.muted }, account.status || '')),
-          h(Button, {
-            onClick: () => logout(provider.id, account.name, `${provider.label} · ${account.email || account.name}`),
-            disabled: busy === `logout:${provider.id}:${account.name}`,
-          }, '退出')))
+      const pendingNotice = (providerId) => (pending?.provider === providerId
+        ? h('div', { style: { ...styles.notice, ...styles.warn } },
+          '等待浏览器授权完成…',
+          pending.userCode ? h('span', null, ' 设备码：', h('span', { style: styles.code }, pending.userCode)) : null,
+          pending.url
+            ? h('span', null, ' ',
+              h('a', { href: pending.url, target: '_blank', rel: 'noreferrer', style: { color: palette.accent } }, '重新打开登录页'))
+            : null,
+          ' ',
+          h(Button, { small: true, onClick: cancelLogin }, '取消'))
+        : null)
 
-        return h('div', { key: provider.id, style: styles.card },
+      function cursorPanel() {
+        const accounts = data.cursor?.accounts ?? []
+        const count = accounts.length
+        const rows = accounts.map((account) => {
+          const label = account.email || '未知邮箱'
+          const stateStyle = account.disabled || account.coolingDown
+            ? styles.warn
+            : account.expired ? styles.err : styles.ok
+          const dot = account.disabled ? '⏸ ' : account.expired ? '✕ ' : '● '
+          return h('div', { key: label + (account.addedAt ?? ''), style: styles.accountRow },
+            h('span', { style: styles.accountMeta },
+              h('span', { style: stateStyle }, dot),
+              h('span', null, label),
+              account.expired ? h('span', { style: styles.err }, '密钥已过期，重新添加即可') : null,
+              account.coolingDown ? h('span', { style: styles.warn }, '鉴权失败冷却中') : null,
+              account.disabled ? h('span', { style: styles.warn }, '已停用') : null),
+            h('span', { style: styles.accountActions },
+              h(Button, {
+                small: true,
+                onClick: () => toggleAccount('cursor', account.email, !account.disabled),
+                disabled: busy === `account:${account.email}`,
+              }, account.disabled ? '启用' : '停用'),
+              h(Button, {
+                small: true,
+                onClick: () => logout('cursor', account.email, `Cursor · ${label}`),
+                disabled: busy === `logout:cursor:${account.email}`,
+              }, '退出')))
+        })
+        return h('div', { style: styles.card },
+          h('div', { style: styles.row },
+            h('div', null,
+              h('div', { style: styles.title }, 'Cursor'),
+              h('div', { style: styles.muted }, count > 0 ? `${count} 个账号 · 新会话自动轮询` : '未登录')),
+            h(Button, {
+              primary: count === 0,
+              onClick: () => login('cursor', 'Cursor'),
+              disabled: busy === 'login:cursor',
+            }, count > 0 ? '添加账号' : '登录')),
+          rows.length > 0 ? h('div', { style: { marginTop: 8 } }, rows) : null,
+          h('div', { style: styles.faint },
+            '添加另一个账号前，先在浏览器退出 cursor.com（或用隐身窗口）再授权；同一邮箱重复登录只会刷新密钥。请求按新会话在账号间轮询，鉴权失败自动冷却换号。'))
+      }
+
+      function providerPanel(provider) {
+        const count = provider.accounts.length
+        const accountRows = provider.accounts.map((account) => {
+          const label = account.email || account.name
+          const stateStyle = account.disabled ? styles.warn : account.unavailable ? styles.err : styles.ok
+          const stateDot = account.disabled ? '⏸ ' : account.unavailable ? '✕ ' : '● '
+          const stats = (account.success || account.failed)
+            ? `成功 ${account.success ?? 0} · 失败 ${account.failed ?? 0}`
+            : ''
+          return h('div', { key: account.name, style: styles.accountRow },
+            h('span', { style: styles.accountMeta },
+              h('span', { style: stateStyle }, stateDot),
+              h('span', null, label),
+              account.status ? h('span', { style: styles.muted }, account.status) : null,
+              account.disabled ? h('span', { style: styles.warn }, '已停用') : null,
+              stats ? h('span', { style: styles.stats }, stats) : null),
+            h('span', { style: styles.accountActions },
+              h(Button, {
+                small: true,
+                onClick: () => toggleAccount(provider.id, account.name, !account.disabled),
+                disabled: busy === `account:${account.name}`,
+              }, account.disabled ? '启用' : '停用'),
+              h(Button, {
+                small: true,
+                onClick: () => logout(provider.id, account.name, `${provider.label} · ${label}`),
+                disabled: busy === `logout:${provider.id}:${account.name}`,
+              }, '退出')))
+        })
+
+        return h('div', { style: styles.card },
           h('div', { style: styles.row },
             h('div', null,
               h('div', { style: styles.title }, provider.label),
               h('div', { style: styles.muted },
-                hasAccounts
-                  ? `${provider.accounts.length} 个账号`
-                  : provider.canLogin ? '未登录' : '需要先在 CLIProxyAPI 安装对应插件')),
+                count > 0
+                  ? `${count} 个账号 · 请求自动轮询`
+                  : provider.canLogin
+                    ? `未登录${provider.flow === 'device' ? ' · 设备码流程' : ''}`
+                    : '需要先在 CLIProxyAPI 插件商店安装对应插件')),
             provider.canLogin
               ? h(Button, {
-                primary: !hasAccounts,
+                primary: count === 0,
                 onClick: () => login(provider.id, provider.label),
-                disabled: busy === `login:${provider.id}` || isPending,
-              }, hasAccounts ? '再登录一个' : '登录')
+                disabled: busy === `login:${provider.id}` || pending?.provider === provider.id,
+              }, count > 0 ? '添加账号' : '登录')
               : null),
           accountRows.length > 0 ? h('div', { style: { marginTop: 8 } }, accountRows) : null,
-          isPending
-            ? h('div', { style: { ...styles.notice, ...styles.warn } },
-              '等待浏览器授权完成…',
-              pending.userCode ? h('span', null, ' 设备码：', h('span', { style: styles.code }, pending.userCode)) : null,
-              pending.url
-                ? h('span', null, ' ',
-                  h('a', { href: pending.url, target: '_blank', rel: 'noreferrer', style: { color: palette.accent } }, '重新打开登录页'))
-                : null)
-            : null,
+          pendingNotice(provider.id),
           provider.models?.length > 0
             ? h('div', { style: styles.faint },
-              `模型：${provider.models.slice(0, 10).join(', ')}${provider.models.length > 10 ? ` 等 ${provider.models.length} 个` : ''}`)
+              `模型 ${provider.models.length} 个：${provider.models.slice(0, 10).join(', ')}${provider.models.length > 10 ? ' …' : ''}`)
             : null)
-      })
+      }
+
+      const activeProvider = (data.providers ?? []).find((provider) => provider.id === activeTab)
+      const panel = activeTab === 'cursor' ? cursorPanel() : activeProvider ? providerPanel(activeProvider) : null
 
       const notes = []
       if (data.managementError) {
@@ -302,7 +424,7 @@ window.__ModuleLoader__.load({
           h('span', { style: notice.kind === 'err' ? styles.err : styles.ok }, notice.text)))
       }
 
-      return h('div', { style: styles.root }, header, proxyCard, cursorCard, providerCards, notes)
+      return h('div', { style: styles.root }, header, proxyStrip, tabBar, panel, notes)
     }
 
     function apply(ctx) {

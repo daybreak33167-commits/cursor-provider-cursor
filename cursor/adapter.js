@@ -19,14 +19,14 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
 
     async listModels(provider) {
       const connection = this.hooks.options()
-      const apiKey = await this.hooks.resolveApiKey(connection).catch(() => undefined)
+      const apiKey = await this.hooks.resolveApiKey(connection, { advance: false }).catch(() => undefined)
       const catalog = await loadCatalog(apiKey)
       return listCatalogModels(provider, catalog, connection.models)
     }
 
     async resolveModel(provider, model) {
       const connection = this.hooks.options()
-      const apiKey = await this.hooks.resolveApiKey(connection).catch(() => undefined)
+      const apiKey = await this.hooks.resolveApiKey(connection, { advance: false }).catch(() => undefined)
       const catalog = await loadCatalog(apiKey)
       return resolveCatalogModel(provider, model, catalog, ReasoningEffortId)
     }
@@ -192,6 +192,8 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
         if (error instanceof LlmError) throw error
         const message = error instanceof Error ? error.message : String(error)
         const code = /401|403|auth|api key/i.test(message) ? 'AUTH' : 'TRANSPORT'
+        // Cool the failing account down so the retry rotates to another one.
+        if (code === 'AUTH') this.hooks.reportAuthFailure?.(apiKey)
         throw new LlmError(`Cursor SDK stream failed: ${message}`, code, { cause: error })
       }
     }

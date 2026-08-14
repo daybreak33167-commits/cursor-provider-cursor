@@ -34,7 +34,7 @@ dsh plugin --profile web add link:/绝对路径/dsh-subscriptions
 
 | 方式 | 说明 |
 | --- | --- |
-| 设置 → 订阅 | 每个提供商一张卡片：登录 / 退出 / 多账号 / 状态 / 模型列表 |
+| 设置 → 订阅 | 供应商页签（带账号数），页签内是账号列表：登录 / 添加账号 / 停用 / 退出 |
 | `/subscriptions` | 同功能的独立页面（仅本机回环可访问） |
 | 斜杠命令 | `/login`（Cursor）、`/login claude`、`/login codex`、`/login antigravity`、`/login kimi`、`/login grok`、`/login status`、`/logout <provider>` |
 
@@ -84,7 +84,9 @@ external 模式下需要自己把 DSH 凭据 `CLIPROXY_MANAGEMENT_KEY` / `CLIPRO
 - 流式输出、reasoning（`reasoning_content` → DSH 思考块；Codex 系列可选 minimal→xhigh 推理力度）。
 - 工具调用：DSH 工具映射为 OpenAI function calling；Cursor 路线用自定义工具桥。
 - 图片输入：DSH 附件自动转 base64（Cursor SDK images / OpenAI `image_url`）。
-- 多账号：同一提供商可登录多个账号，由 CLIProxyAPI 轮询负载均衡；面板里可单独停用/退出。
+- 多账号：所有提供商（含 Cursor）都支持多账号轮询——CLIProxyAPI 渠道由代理负载均衡；
+  Cursor 由插件按新会话轮询、鉴权失败自动冷却 5 分钟换号（账号列表存 DSH 凭据 `CURSOR_ACCOUNTS`）。
+  面板里可单独停用/退出账号；`/logout cursor <邮箱>` 退出单个 Cursor 账号。
 
 ## 数据位置
 
