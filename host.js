@@ -52,7 +52,7 @@ export function resolveHost(id) {
       errors.push(`${file}: ${error instanceof Error ? error.message : error}`)
     }
   }
-  throw new Error(`dsh-llm-cursor: cannot resolve host package "${id}"\n${errors.slice(0, 8).join('\n')}`)
+  throw new Error(`dsh-subscriptions: cannot resolve host package "${id}"\n${errors.slice(0, 8).join('\n')}`)
 }
 
 export async function importHost(id) {

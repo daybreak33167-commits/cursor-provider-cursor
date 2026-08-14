@@ -1,21 +1,21 @@
 {
-  "name": "dsh-llm-cursor",
-  "version": "0.1.0",
-  "description": "DeepSeek Harness LLM adapter that drives DSH with Cursor models via @cursor/sdk",
+  "name": "dsh-subscriptions",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness unified subscriptions plugin: Cursor models via @cursor/sdk plus Claude Code / Codex / Antigravity / Kimi / Grok subscriptions via a managed CLIProxyAPI",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
-    "adapter.js",
-    "session.js",
-    "prompt.js",
     "host.js",
-    "oauth.js",
-    "catalog.js",
+    "commands.js",
+    "cursor/",
+    "cliproxy/",
+    "client/",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -26,6 +26,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "dependencies": {
@@ -36,6 +43,9 @@
     "dsh-plugin",
     "deepseek-harness",
     "cursor",
+    "cliproxyapi",
+    "claude-code",
+    "codex",
     "llm-adapter"
   ]
 }

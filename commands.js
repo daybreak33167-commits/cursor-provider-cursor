@@ -1,0 +1,159 @@
+import { PROXY_PROVIDERS, providerLabel } from './cliproxy/providers.js'
+
+const LOGIN_ALIASES = {
+  cursor: 'cursor',
+  claude: 'claude-code',
+  'claude-code': 'claude-code',
+  anthropic: 'claude-code',
+  codex: 'codex',
+  openai: 'codex',
+  gpt: 'codex',
+  antigravity: 'antigravity',
+  gemini: 'gemini-cli',
+  'gemini-cli': 'gemini-cli',
+  qwen: 'qwen-code',
+  'qwen-code': 'qwen-code',
+  kimi: 'kimi-code',
+  'kimi-code': 'kimi-code',
+  moonshot: 'kimi-code',
+  grok: 'grok-build',
+  'grok-build': 'grok-build',
+  xai: 'grok-build',
+  iflow: 'iflow',
+}
+
+function parseAction(rawInput) {
+  const action = String(rawInput ?? '').trim().toLowerCase()
+  if (!action || action.startsWith('[')) return ''
+  return action.split(/\s+/)[0]
+}
+
+async function cursorLogin(oauth, force) {
+  if (!force) {
+    const status = await oauth.publicStatus()
+    if (status.status === 'logged-in') {
+      return {
+        kind: 'success',
+        text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。/logout 退出，或打开 设置 → 订阅`,
+      }
+    }
+  }
+  await oauth.startLogin()
+  return {
+    kind: 'success',
+    text: '已打开 Cursor 登录页。完成后回到 DSH 即可。状态见 设置 → 订阅（或 /subscriptions）',
+  }
+}
+
+async function proxyLogin(subscriptions, providerId) {
+  const started = await subscriptions.login(providerId)
+  const label = providerLabel(providerId)
+  const parts = [`已打开 ${label} 登录页，请在浏览器完成授权。`]
+  if (started.userCode) parts.push(`设备码：${started.userCode}`)
+  if (started.url) parts.push(`如浏览器未弹出，请手动打开：${started.url}`)
+  parts.push('完成后模型会自动出现在模型选择器；状态见 设置 → 订阅')
+  return { kind: 'success', text: parts.join('\n') }
+}
+
+async function statusSummary({ cursorOauth, subscriptions }) {
+  const lines = []
+  const overview = await subscriptions.overview()
+
+  const cursor = overview.cursor
+  lines.push(cursor?.status === 'logged-in'
+    ? `Cursor：已登录${cursor.email ? `（${cursor.email}）` : ''}`
+    : 'Cursor：未登录（/login cursor）')
+
+  const proxy = overview.proxy
+  const phaseText = {
+    running: `运行中${proxy.version ? ` v${proxy.version}` : ''}`,
+    starting: '启动中',
+    installing: '正在下载',
+    stopped: '已停止',
+    error: `错误：${proxy.error ?? ''}`,
+    'external-ok': '外部实例已连接',
+    'external-unreachable': '外部实例不可达',
+  }[proxy.phase] ?? proxy.phase
+  lines.push(`CLIProxyAPI：${phaseText}（${proxy.baseUrl}）`)
+
+  for (const provider of overview.providers) {
+    if (provider.accounts.length === 0) continue
+    const accounts = provider.accounts
+      .map((account) => `${account.email || account.name}${account.disabled ? '（停用）' : ''}`)
+      .join('、')
+    lines.push(`${provider.label}：${accounts}`)
+  }
+
+  const loggedOut = overview.providers
+    .filter((provider) => provider.canLogin && provider.accounts.length === 0)
+    .map((provider) => provider.id)
+  if (loggedOut.length > 0) {
+    lines.push(`未登录：${loggedOut.map((id) => `/login ${id}`).join('  ')}`)
+  }
+  return { kind: 'success', text: lines.join('\n') }
+}
+
+export function registerSubscriptionCommands(ctx, { cursorOauth, subscriptions }) {
+  const hint = [
+    'cursor', ...PROXY_PROVIDERS.map((provider) => provider.id), 'status',
+  ].join(' | ')
+
+  ctx.commands.register({
+    name: 'login',
+    description: 'Sign in to a subscription (Cursor / Claude Code / Codex / ...)',
+    input: { hint: `[${hint}]` },
+    async handler(invocation) {
+      const action = parseAction(invocation.rawInput)
+      try {
+        if (action === 'status') return await statusSummary({ cursorOauth, subscriptions })
+        if (action === 'logout') {
+          await cursorOauth.logout()
+          return { kind: 'success', text: '已退出 Cursor 登录。' }
+        }
+        if (!action || action === 'again' || action === 'cursor') {
+          return await cursorLogin(cursorOauth, action === 'again')
+        }
+        const providerId = LOGIN_ALIASES[action]
+        if (!providerId) {
+          return {
+            kind: 'error',
+            text: `未知提供商 "${action}"。可用：${hint}`,
+          }
+        }
+        if (providerId === 'cursor') return await cursorLogin(cursorOauth, false)
+        return await proxyLogin(subscriptions, providerId)
+      } catch (error) {
+        return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+
+  ctx.commands.register({
+    name: 'logout',
+    description: 'Sign out of a subscription',
+    input: { hint: '[cursor | claude-code | codex | ...]' },
+    async handler(invocation) {
+      const action = parseAction(invocation.rawInput)
+      try {
+        if (!action || action === 'cursor') {
+          await cursorOauth.logout()
+          return { kind: 'success', text: '已退出 Cursor 登录。' }
+        }
+        const providerId = LOGIN_ALIASES[action]
+        if (!providerId) {
+          return { kind: 'error', text: `未知提供商 "${action}"。` }
+        }
+        const result = await subscriptions.logout(providerId)
+        const removed = Array.isArray(result?.removed) ? result.removed : []
+        return {
+          kind: 'success',
+          text: removed.length > 0
+            ? `已退出 ${providerLabel(providerId)}：${removed.join('、')}`
+            : `${providerLabel(providerId)} 没有已登录的账号。`,
+        }
+      } catch (error) {
+        return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+      }
+    },
+  })
+}

@@ -103,7 +103,7 @@ function renderPage(state) {
 </html>`
 }
 
-function openInBrowser(url) {
+export function openInBrowser(url) {
   return new Promise((resolve, reject) => {
     const child = process.platform === 'win32'
       ? spawn('rundll32', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore' })
@@ -295,63 +295,5 @@ export function registerOAuthRoutes(ctx, oauth) {
   })
 }
 
-async function runLogin(oauth, force) {
-  if (!force) {
-    const status = await oauth.publicStatus()
-    if (status.status === 'logged-in') {
-      return {
-        kind: 'success',
-        text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 /oauth`,
-      }
-    }
-  }
-  try {
-    await oauth.startLogin()
-    return {
-      kind: 'success',
-      text: '已打开 Cursor 登录页。完成后回到 DSH 即可。状态页：/oauth',
-    }
-  } catch (error) {
-    return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
-  }
-}
-
-function commandAction(rawInput) {
-  const action = String(rawInput ?? '').trim().toLowerCase()
-  if (!action || action.startsWith('[')) return ''
-  return action
-}
-
-export function registerOAuthCommand(ctx, oauth) {
-  ctx.commands.register({
-    name: 'login',
-    description: 'Sign in to Cursor via OAuth',
-    input: { hint: '[status | again]' },
-    async handler(invocation) {
-      const action = commandAction(invocation.rawInput)
-      if (action === 'logout') {
-        await oauth.logout()
-        return { kind: 'success', text: '已退出 Cursor 登录。' }
-      }
-      if (action === 'status') {
-        const status = await oauth.publicStatus()
-        if (status.status === 'logged-in') {
-          return {
-            kind: 'success',
-            text: `Cursor 已登录${status.email ? `（${status.email}）` : ''}。输入 /logout 退出，或打开 /oauth`,
-          }
-        }
-        return { kind: 'success', text: 'Cursor 未登录。输入 /login 开始登录，或打开 /oauth' }
-      }
-      return await runLogin(oauth, action === 'again')
-    },
-  })
-  ctx.commands.register({
-    name: 'logout',
-    description: 'Sign out of Cursor',
-    async handler() {
-      await oauth.logout()
-      return { kind: 'success', text: '已退出 Cursor 登录。' }
-    },
-  })
-}
+// The /login and /logout slash commands moved to ../commands.js, which
+// handles every subscription provider (Cursor plus CLIProxyAPI-backed ones).

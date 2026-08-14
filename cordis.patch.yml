@@ -1,12 +1,13 @@
-# Cursor models as a first-class DSH provider route.
-# Inserted after dsh-base so the Models page and agent loop can select `cursor`.
+# Unified subscriptions plugin: Cursor models plus CLIProxyAPI-backed
+# subscription providers (Claude Code / Codex / Antigravity / Kimi / Grok).
+# Inserted after dsh-base so the Models page and agent loop can select them.
 
 - insert:
-    - id: llm-cursor
-      name: dsh-llm-cursor
+    - id: subscriptions
+      name: dsh-subscriptions
 
 # New sessions default to a Cursor model. Override in the profile
-# cordis.patch.yml or Settings → Models if you want DeepSeek back.
+# cordis.patch.yml or Settings -> Models if you want DeepSeek back.
 - id: agent-default-model
   config:
     provider: cursor
