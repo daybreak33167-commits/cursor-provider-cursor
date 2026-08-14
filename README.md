@@ -13,7 +13,7 @@ DeepSeek Harness (DSH) 统一「订阅」插件：不用 API Key，通过 OAuth 
 ## 安装
 
 ```bash
-git clone https://github.com/daybreak33167-commits/cursor-provider-cursor dsh-subscriptions
+git clone https://github.com/daybreak33167-commits/dsh-subscriptions.git
 dsh plugin --profile web add link:/绝对路径/dsh-subscriptions
 ```
 

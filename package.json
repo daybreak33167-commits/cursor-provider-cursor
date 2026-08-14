@@ -1,7 +1,7 @@
 {
   "name": "dsh-subscriptions",
   "version": "0.2.0",
-  "description": "DeepSeek Harness unified subscriptions plugin: Cursor models via @cursor/sdk plus Claude Code / Codex / Antigravity / Kimi / Grok subscriptions via a managed CLIProxyAPI",
+  "description": "DeepSeek Harness unified subscriptions plugin: Cursor, Factory Droid, and Claude Code / Codex / Antigravity / Kimi / Grok via a managed CLIProxyAPI",
   "type": "module",
   "main": "index.js",
   "exports": {

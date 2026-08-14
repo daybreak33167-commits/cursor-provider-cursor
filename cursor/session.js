@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { Agent } from '@cursor/sdk'
 import { buildFollowUpPrompt, buildKickoffPrompt, imageRefsOf, imageRefsOfBlocks, sanitizeToolName } from './prompt.js'
 
-const SCRATCH = join(tmpdir(), 'dsh-llm-cursor-scratch')
+const SCRATCH = join(tmpdir(), 'dsh-subscriptions-scratch')
 mkdirSync(SCRATCH, { recursive: true })
 
 const TOOL_BATCH_IDLE_MS = 40
