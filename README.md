@@ -46,5 +46,5 @@ dsh --profile headless "Summarize this repository"
 ## Notes
 
 - Cursor does not publish a raw OpenAI-compatible chat API. This adapter uses the local Cursor SDK agent with built-in IDE tools disabled (`tools: ['mcp']`) and parks DSH tool calls so Harness executes them.
-- Image input is not supported.
+- Image input is supported: attachments are read from DSH's attachment store and sent to the Cursor SDK as base64 (user messages and image-bearing tool results).
 - Developer-preview DSH may change the adapter seam.

@@ -367,7 +367,7 @@ export function listCatalogModels(provider, catalog, configured) {
       id,
       name,
       ...description ? { description } : {},
-      inputModalities: ['text'],
+      inputModalities: ['text', 'image'],
     })
   }
 
@@ -416,7 +416,7 @@ export function resolveCatalogModel(provider, modelId, catalog, ReasoningEffortI
     provider,
     id: modelId,
     name,
-    inputModalities: ['text'],
+    inputModalities: ['text', 'image'],
     context: {
       contextWindow: record.maxContextWindow ?? record.contextWindow ?? DEFAULT_CONTEXT,
     },

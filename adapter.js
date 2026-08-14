@@ -32,12 +32,24 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
     }
 
     async * stream(options) {
-      for (const message of options.messages ?? []) {
-        if (contentHasImage(message.content)) {
+      let readImage
+      if ((options.messages ?? []).some((message) => contentHasImage(message.content))) {
+        const attachments = this.hooks.resolveAttachments?.()
+        if (!attachments) {
           throw new LlmError(
-            'The Cursor adapter does not send image content. Use a text-only request.',
+            'Cursor image input requires the DSH attachment service, which is unavailable.',
             'UNSUPPORTED_CONTENT',
           )
+        }
+        readImage = async (ref) => {
+          const stored = await attachments.readImage(ref, options.signal)
+          return {
+            data: Buffer.from(stored.data).toString('base64'),
+            mimeType: stored.ref.mediaType,
+            ...stored.ref.width && stored.ref.height
+              ? { dimension: { width: stored.ref.width, height: stored.ref.height } }
+              : {},
+          }
         }
       }
 
@@ -103,6 +115,7 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
           tools: options.tools,
           signal: options.signal,
           oneshot,
+          readImage,
         })
 
         for await (const event of session.pull(options.signal)) {

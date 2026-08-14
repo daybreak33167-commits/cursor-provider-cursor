@@ -14,7 +14,26 @@ export function flattenText(blocks) {
 }
 
 export function contentHasImage(blocks) {
-  return (blocks ?? []).some((block) => block.type === 'image')
+  return (blocks ?? []).some((block) => block.type === 'image'
+    || (block.type === 'tool-result' && contentHasImage(block.content)))
+}
+
+export function imageRefsOfBlocks(blocks) {
+  const refs = []
+  for (const block of blocks ?? []) {
+    if (block.type === 'image' && block.attachment) refs.push(block.attachment)
+    else if (block.type === 'tool-result') refs.push(...imageRefsOfBlocks(block.content))
+  }
+  return refs
+}
+
+export function imageRefsOf(messages) {
+  const refs = []
+  for (const message of messages ?? []) {
+    if (message.role === 'assistant') continue
+    refs.push(...imageRefsOfBlocks(message.content))
+  }
+  return refs
 }
 
 export function isToolResultMessage(message) {

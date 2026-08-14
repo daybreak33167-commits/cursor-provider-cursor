@@ -81,6 +81,7 @@ export function apply(ctx, config = {}) {
   const adapter = new CursorAdapter({
     options,
     resolveApiKey: (connection) => resolveApiKey(ctx, connection),
+    resolveAttachments: () => ctx.get?.('attachments'),
   })
 
   ctx.llm.registerConfigurableProviders?.([

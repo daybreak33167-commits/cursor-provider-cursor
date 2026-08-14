@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Agent } from '@cursor/sdk'
-import { buildFollowUpPrompt, buildKickoffPrompt, sanitizeToolName } from './prompt.js'
+import { buildFollowUpPrompt, buildKickoffPrompt, imageRefsOf, imageRefsOfBlocks, sanitizeToolName } from './prompt.js'
 
 const SCRATCH = join(tmpdir(), 'dsh-llm-cursor-scratch')
 mkdirSync(SCRATCH, { recursive: true })
@@ -240,7 +240,7 @@ export class CursorSession {
     }
   }
 
-  async startRun(prompt, tools, signal) {
+  async startRun(prompt, tools, signal, images) {
     const agent = await this.ensureAgent(tools)
     this.deltaQueue = []
     this.seenTypes = []
@@ -248,7 +248,7 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
-    this.run = await agent.send(prompt, {
+    this.run = await agent.send(images?.length ? { text: prompt, images } : prompt, {
       model: this.modelSelection,
       onDelta: (args) => this.enqueueDelta(args),
       local: {
@@ -271,7 +271,7 @@ export class CursorSession {
     }
   }
 
-  resolveToolResults(results) {
+  async resolveToolResults(results, readImage) {
     for (const result of results) {
       const parked = this.pending.get(String(result.toolCallId))
       if (!parked) continue
@@ -279,7 +279,15 @@ export class CursorSession {
         .filter((block) => block.type === 'text')
         .map((block) => block.text)
         .join('') || (result.isError ? 'Tool failed.' : '(no output)')
-      if (result.isError) {
+      const refs = readImage ? imageRefsOfBlocks(result.content) : []
+      if (refs.length > 0) {
+        const images = await Promise.all(refs.map((ref) => readImage(ref)))
+        const content = [{ type: 'text', text }]
+        for (const image of images) {
+          content.push({ type: 'image', data: image.data, mimeType: image.mimeType })
+        }
+        parked.resolve({ content, ...result.isError ? { isError: true } : {} })
+      } else if (result.isError) {
         parked.resolve({ content: [{ type: 'text', text }], isError: true })
       } else {
         parked.resolve(text)
@@ -397,28 +405,24 @@ export class CursorSession {
     }
   }
 
-  async beginTurn({ system, messages, tools, signal, oneshot }) {
-    const pendingResults = messages
-      .slice(this.consumedCount)
+  async beginTurn({ system, messages, tools, signal, oneshot, readImage }) {
+    const fresh = messages.slice(this.consumedCount)
+    const pendingResults = fresh
       .flatMap((message) => (message.content ?? []).filter((block) => block.type === 'tool-result'))
 
     if (this.iterator && pendingResults.length > 0 && this.pending.size > 0) {
-      this.resolveToolResults(pendingResults)
+      await this.resolveToolResults(pendingResults, readImage)
       this.consumedCount = messages.length
       return
     }
 
-    if (oneshot || !this.agent) {
-      const prompt = this.consumedCount === 0
-        ? buildKickoffPrompt(system, messages)
-        : buildFollowUpPrompt(system, messages, this.consumedCount)
-      await this.startRun(prompt, tools, signal)
-      this.consumedCount = messages.length
-      return
-    }
+    const refs = readImage ? imageRefsOf(fresh) : []
+    const images = refs.length > 0 ? await Promise.all(refs.map((ref) => readImage(ref))) : []
 
-    const prompt = buildFollowUpPrompt(system, messages, this.consumedCount)
-    await this.startRun(prompt, tools, signal)
+    const prompt = (oneshot || !this.agent) && this.consumedCount === 0
+      ? buildKickoffPrompt(system, messages)
+      : buildFollowUpPrompt(system, messages, this.consumedCount)
+    await this.startRun(prompt, tools, signal, images)
     this.consumedCount = messages.length
   }
 
