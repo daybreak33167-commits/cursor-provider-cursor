@@ -6,6 +6,7 @@ import { createProxySupervisor } from './cliproxy/runtime.js'
 import { createManagementClient } from './cliproxy/management.js'
 import { createProxyCatalog } from './cliproxy/catalog.js'
 import { createProxyAdapterClass } from './cliproxy/adapter.js'
+import { createFactoryManager } from './cliproxy/factory.js'
 import { createSubscriptionsController, registerSubscriptionRoutes } from './cliproxy/routes.js'
 import { ALL_PROVIDER_IDS, FALLBACK_PROVIDER, PROXY_PROVIDERS } from './cliproxy/providers.js'
 
@@ -196,11 +197,22 @@ export function apply(ctx, config = {}) {
     })),
   ])
 
+  // Factory Droid: token manager that mirrors accounts into CLIProxyAPI as
+  // custom claude/codex/openai-compat upstreams (factory-* model aliases).
+  const factory = createFactoryManager({
+    getCredentials: () => ctx.get?.('credentials'),
+    mgmt,
+    proxyStatus: () => supervisor.status(),
+    onChanged: () => catalog.invalidate(),
+    logger: ctx.logger,
+  })
+
   const subscriptions = createSubscriptionsController({
     supervisor,
     mgmt,
     catalog,
     cursorOauth: cursor.oauth,
+    factory,
     logger: ctx.logger,
   })
   ctx.inject(['webServer'], (webCtx) => {
@@ -219,6 +231,7 @@ export function apply(ctx, config = {}) {
     if (proxyStarted) return
     proxyStarted = true
     void supervisor.start()
+    factory.start()
   }
   try {
     ctx.inject(['credentials'], () => startProxy())
@@ -230,6 +243,7 @@ export function apply(ctx, config = {}) {
 
   const stopProxy = () => {
     clearTimeout(startFallback)
+    factory.stop()
     void supervisor.stop()
   }
   if (typeof ctx.effect === 'function') {

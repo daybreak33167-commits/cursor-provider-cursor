@@ -59,6 +59,17 @@ export const PROXY_PROVIDERS = [
     match: (model) => /^grok/.test(model),
   },
   {
+    // Factory Droid: no CLIProxyAPI OAuth route. Tokens are managed by this
+    // plugin (cliproxy/factory.js) and injected as custom upstreams; models
+    // are exposed under factory-* aliases.
+    id: 'factory',
+    label: 'Factory Droid',
+    authPath: undefined,
+    flow: 'token',
+    channels: ['factory'],
+    match: (model) => /^factory[-/]/.test(model),
+  },
+  {
     id: 'iflow',
     label: 'iFlow',
     authPath: undefined,

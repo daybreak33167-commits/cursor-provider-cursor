@@ -19,6 +19,9 @@ const LOGIN_ALIASES = {
   grok: 'grok-build',
   'grok-build': 'grok-build',
   xai: 'grok-build',
+  factory: 'factory',
+  droid: 'factory',
+  'factory-droid': 'factory',
   iflow: 'iflow',
 }
 
@@ -26,10 +29,6 @@ function tokensOf(rawInput) {
   const raw = String(rawInput ?? '').trim()
   if (!raw || raw.startsWith('[')) return []
   return raw.split(/\s+/)
-}
-
-function parseAction(rawInput) {
-  return (tokensOf(rawInput)[0] ?? '').toLowerCase()
 }
 
 async function cursorLogin(oauth, force) {
@@ -57,6 +56,33 @@ async function cursorLogin(oauth, force) {
     kind: 'success',
     text: '已打开 Cursor 登录页。完成后回到 DSH 即可。状态见 设置 → 订阅（或 /subscriptions）',
   }
+}
+
+// /login factory                    -> import from droid CLI (if logged in)
+// /login factory <refresh-token>    -> add a WorkOS refresh token
+// /login factory key <api-key>      -> add a Factory API key
+async function factoryLogin(subscriptions, tokens) {
+  const [first, second] = tokens
+  if (!first) {
+    try {
+      const result = await subscriptions.factoryAdd('import')
+      return { kind: 'success', text: `已从 droid CLI 导入 Factory 账号：${result.email}。模型稍后出现在模型选择器（factory-* 前缀）。` }
+    } catch (error) {
+      return {
+        kind: 'error',
+        text: `${error instanceof Error ? error.message : error}\n`
+          + '用法：/login factory <refresh-token>（或 /login factory key <api-key>）；'
+          + '也可以在 设置 → 订阅 → Factory Droid 页签操作。',
+      }
+    }
+  }
+  if (first.toLowerCase() === 'key') {
+    if (!second) return { kind: 'error', text: '用法：/login factory key <api-key>' }
+    const result = await subscriptions.factoryAdd('api-key', second)
+    return { kind: 'success', text: `已添加 Factory API Key 账号：${result.email}。` }
+  }
+  const result = await subscriptions.factoryAdd('refresh-token', first)
+  return { kind: 'success', text: `已添加 Factory 账号：${result.email}。token 每 6 小时自动刷新。` }
 }
 
 async function proxyLogin(subscriptions, providerId) {
@@ -125,7 +151,8 @@ export function registerSubscriptionCommands(ctx, { cursorOauth, subscriptions }
     description: 'Sign in to a subscription (Cursor / Claude Code / Codex / ...)',
     input: { hint: `[${hint}]` },
     async handler(invocation) {
-      const action = parseAction(invocation.rawInput)
+      const tokens = tokensOf(invocation.rawInput)
+      const action = (tokens[0] ?? '').toLowerCase()
       try {
         if (action === 'status') return await statusSummary({ cursorOauth, subscriptions })
         if (action === 'logout') {
@@ -143,6 +170,7 @@ export function registerSubscriptionCommands(ctx, { cursorOauth, subscriptions }
           }
         }
         if (providerId === 'cursor') return await cursorLogin(cursorOauth, false)
+        if (providerId === 'factory') return await factoryLogin(subscriptions, tokens.slice(1))
         return await proxyLogin(subscriptions, providerId)
       } catch (error) {
         return { kind: 'error', text: error instanceof Error ? error.message : String(error) }

@@ -127,6 +127,7 @@ window.__ModuleLoader__.load({
       const [pending, setPending] = react.useState(undefined)
       const [busy, setBusy] = react.useState('')
       const [tab, setTab] = react.useState(undefined)
+      const [factoryToken, setFactoryToken] = react.useState('')
       const aliveRef = react.useRef(true)
       const pendingRef = react.useRef(undefined)
       pendingRef.current = pending
@@ -246,6 +247,26 @@ window.__ModuleLoader__.load({
           await refresh()
         } catch (cause) {
           setNotice({ text: `操作失败：${cause.message}`, kind: 'err' })
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const factoryAdd = async (mode) => {
+        const value = factoryToken.trim()
+        if (mode !== 'import' && !value) {
+          setNotice({ text: '请先粘贴 refresh token 或 API Key。', kind: 'err' })
+          return
+        }
+        setBusy(`factory:${mode}`)
+        setNotice({ text: mode === 'import' ? '正在从 droid CLI 导入…' : '正在验证并添加…', kind: 'ok' })
+        try {
+          const result = await post('/subscriptions/api/factory/add', { mode, value })
+          setNotice({ text: `已添加 Factory 账号：${result.email || ''}，模型稍后出现在模型选择器。`, kind: 'ok' })
+          setFactoryToken('')
+          await refresh()
+        } catch (cause) {
+          setNotice({ text: `添加失败：${cause.message}`, kind: 'err' })
         } finally {
           setBusy('')
         }
@@ -411,8 +432,78 @@ window.__ModuleLoader__.load({
             : null)
       }
 
+      function factoryPanel(provider) {
+        const count = provider.accounts.length
+        const accountRows = provider.accounts.map((account) => {
+          const label = account.email || account.name
+          const stateStyle = account.disabled ? styles.warn : account.unavailable ? styles.err : styles.ok
+          const stateDot = account.disabled ? '⏸ ' : account.unavailable ? '✕ ' : '● '
+          return h('div', { key: account.name, style: styles.accountRow },
+            h('span', { style: styles.accountMeta },
+              h('span', { style: stateStyle }, stateDot),
+              h('span', null, label),
+              account.status ? h('span', { style: styles.muted }, account.status) : null,
+              account.statusMessage ? h('span', { style: styles.err }, account.statusMessage) : null,
+              account.disabled ? h('span', { style: styles.warn }, '已停用') : null),
+            h('span', { style: styles.accountActions },
+              h(Button, {
+                small: true,
+                onClick: () => toggleAccount('factory', account.name, !account.disabled),
+                disabled: busy === `account:${account.name}`,
+              }, account.disabled ? '启用' : '停用'),
+              h(Button, {
+                small: true,
+                onClick: () => logout('factory', account.name, `Factory Droid · ${label}`),
+                disabled: busy === `logout:factory:${account.name}`,
+              }, '退出')))
+        })
+
+        const inputStyle = {
+          flex: 1, minWidth: 220, padding: '6px 10px', borderRadius: 9,
+          border: `1px solid ${palette.buttonBorder}`, background: palette.buttonBg,
+          color: palette.text, font: 'inherit', fontSize: 13,
+        }
+        const addRow = h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' } },
+          h('input', {
+            type: 'password',
+            placeholder: '粘贴 WorkOS refresh token 或 Factory API Key',
+            value: factoryToken,
+            onChange: (event) => setFactoryToken(event.target.value),
+            style: inputStyle,
+          }),
+          h(Button, { small: true, onClick: () => factoryAdd('refresh-token'), disabled: busy.startsWith('factory:') },
+            '以 Refresh Token 添加'),
+          h(Button, { small: true, onClick: () => factoryAdd('api-key'), disabled: busy.startsWith('factory:') },
+            '以 API Key 添加'),
+          provider.cliAuthAvailable
+            ? h(Button, { small: true, primary: true, onClick: () => factoryAdd('import'), disabled: busy.startsWith('factory:') },
+              '从 droid CLI 导入')
+            : null)
+
+        return h('div', { style: styles.card },
+          h('div', { style: styles.row },
+            h('div', null,
+              h('div', { style: styles.title }, 'Factory Droid'),
+              h('div', { style: styles.muted },
+                count > 0 ? `${count} 个账号 · 请求自动轮询` : '未登录 · 复用 droid CLI 的订阅'))),
+          accountRows.length > 0 ? h('div', { style: { marginTop: 8 } }, accountRows) : null,
+          addRow,
+          h('div', { style: styles.faint },
+            provider.cliAuthAvailable
+              ? '检测到 ~/.factory/auth.json，可一键导入 droid CLI 登录（token 每 6 小时自动刷新，droid CLI 保持可用）。'
+              : '在任意机器运行 droid CLI 登录后，复制 ~/.factory/auth.json 里的 refresh_token 粘贴到上方即可。'),
+          provider.models?.length > 0
+            ? h('div', { style: styles.faint },
+              `模型 ${provider.models.length} 个：${provider.models.slice(0, 10).join(', ')}${provider.models.length > 10 ? ' …' : ''}`)
+            : null)
+      }
+
       const activeProvider = (data.providers ?? []).find((provider) => provider.id === activeTab)
-      const panel = activeTab === 'cursor' ? cursorPanel() : activeProvider ? providerPanel(activeProvider) : null
+      const panel = activeTab === 'cursor'
+        ? cursorPanel()
+        : activeProvider
+          ? (activeProvider.id === 'factory' ? factoryPanel(activeProvider) : providerPanel(activeProvider))
+          : null
 
       const notes = []
       if (data.managementError) {

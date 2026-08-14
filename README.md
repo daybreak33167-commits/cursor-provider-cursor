@@ -5,6 +5,8 @@ DeepSeek Harness (DSH) 统一「订阅」插件：不用 API Key，通过 OAuth 
 - **Cursor**：内置 `@cursor/sdk` 适配器（Composer / GPT / Claude / Gemini / Grok / Kimi 等 Cursor 云端模型）。
 - **CLIProxyAPI**：插件自动下载并托管 [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，
   把 Claude Code、OpenAI Codex、Antigravity、Kimi Code、Grok Build 等订阅统一成本地 OpenAI 兼容端点。
+- **Factory Droid**：复用 [factory.ai](https://factory.ai) droid 订阅——插件管理其 WorkOS token
+  （可一键导入 droid CLI 登录），并作为自定义上游注入 CLIProxyAPI，模型以 `factory-*` 别名单独分组。
 
 所有模型都会出现在 DSH 的模型选择器里；登录管理集中在 **设置 → 订阅** 面板（或独立页面 `/subscriptions`）。
 
@@ -36,12 +38,20 @@ dsh plugin --profile web add link:/绝对路径/dsh-subscriptions
 | --- | --- |
 | 设置 → 订阅 | 供应商页签（带账号数），页签内是账号列表：登录 / 添加账号 / 停用 / 退出 |
 | `/subscriptions` | 同功能的独立页面（仅本机回环可访问） |
-| 斜杠命令 | `/login`（Cursor）、`/login claude`、`/login codex`、`/login antigravity`、`/login kimi`、`/login grok`、`/login status`、`/logout <provider>` |
+| 斜杠命令 | `/login`（Cursor）、`/login claude`、`/login codex`、`/login antigravity`、`/login kimi`、`/login grok`、`/login factory`、`/login status`、`/logout <provider>` |
 
 OAuth 流程全部由 CLIProxyAPI 完成（浏览器授权、token 刷新、多账号轮询）；DSH 侧只保存
 代理的管理密钥，订阅 token 存放在 `~/.dsh/cliproxy/auth/`，不会下发到浏览器。
 
 Kimi 和 Grok 是设备码流程：命令/面板会显示 `XXXX-XXXX` 设备码，在弹出的页面里输入即可。
+
+Factory Droid 没有公开的浏览器 OAuth，三种添加方式：
+
+- **从 droid CLI 导入**：本机运行过 `droid` 并登录后，面板会出现一键导入按钮
+  （读取 `~/.factory/auth.json`，之后 token 由插件每 6 小时自动刷新并回写，droid CLI 保持可用）；
+- **粘贴 refresh token**：把任意机器 `~/.factory/auth.json` 里的 `refresh_token` 粘贴到面板，
+  或 `/login factory <refresh-token>`；
+- **粘贴 API Key**：Factory 平台签发的固定 Key，`/login factory key <api-key>`。
 
 ## 提供商与模型分组
 
@@ -53,12 +63,18 @@ Kimi 和 Grok 是设备码流程：命令/面板会显示 `XXXX-XXXX` 设备码�
 | `antigravity` | Antigravity | CLIProxyAPI 内置 |
 | `kimi-code` | Kimi Code | CLIProxyAPI 内置（设备码） |
 | `grok-build` | Grok Build | CLIProxyAPI 内置（设备码） |
+| `factory` | Factory Droid（factory.ai） | 插件管理 WorkOS token，注入 CLIProxyAPI 自定义上游 |
 | `gemini-cli` / `qwen-code` / `iflow` | Gemini CLI / Qwen / iFlow | 需要先在 CLIProxyAPI 插件商店安装对应插件（v7 起这些渠道走 CPA 插件） |
 | `cliproxy` | 其它（openai-compatibility 透传、CPA 插件渠道等） | — |
 
 模型按前缀自动归入以上家族（`claude-*` → `claude-code`、`gpt-*`/`codex-*` → `codex`、
 `gemini-*` → `gemini-cli`、`kimi-*` → `kimi-code`、`grok-*` → `grok-build`……），
 未识别的进 `cliproxy`。登录成功后约 1 分钟内模型列表自动刷新。
+
+Factory Droid 的模型走 `factory-` 前缀别名（如 `factory-claude-opus-4-6`、`factory-gpt-5.3-codex`、
+`factory-glm-5`），与真正的 Claude Code / Codex 账号互不混淆：Claude 系走 Factory 的
+Anthropic 端点、GPT 系走 Responses 端点、GLM/Kimi 走 chat-completions 端点，
+多个 Factory 账号之间由 CLIProxyAPI 轮询负载均衡。
 
 ## 配置（设置 → 插件 → subscriptions）
 
@@ -87,6 +103,8 @@ external 模式下需要自己把 DSH 凭据 `CLIPROXY_MANAGEMENT_KEY` / `CLIPRO
 - 多账号：所有提供商（含 Cursor）都支持多账号轮询——CLIProxyAPI 渠道由代理负载均衡；
   Cursor 由插件按新会话轮询、鉴权失败自动冷却 5 分钟换号（账号列表存 DSH 凭据 `CURSOR_ACCOUNTS`）。
   面板里可单独停用/退出账号；`/logout cursor <邮箱>` 退出单个 Cursor 账号。
+- Factory Droid：账号存 DSH 凭据 `FACTORY_ACCOUNTS`（refresh token 每 6 小时自动刷新、轮换后即时持久化），
+  请求自动携带 Droid 身份系统提示；`/logout factory <邮箱>` 退出单个账号。
 
 ## 数据位置
 

@@ -1,6 +1,10 @@
 import { sanitizeToolName } from '../cursor/prompt.js'
 import { providerLabel } from './providers.js'
 
+// Factory validates that requests come from its own agent; the droid CLI (and
+// droid2api) prepend this identity line to every system prompt.
+const DROID_SYSTEM_PREFIX = 'You are Droid, an AI software engineering agent built by Factory.\n\n'
+
 function dataUrl(image) {
   return `data:${image.mimeType || 'image/png'};base64,${image.data}`
 }
@@ -173,8 +177,11 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
       const readImage = this.makeImageReader(options)
       const aliases = new Map()
       const toolNameOf = (name) => sanitizeToolName(name)
+      const system = options.provider === 'factory'
+        ? DROID_SYSTEM_PREFIX + (options.system ?? '')
+        : options.system
       const messages = await toOpenAiMessages({
-        system: options.system,
+        system,
         messages: options.messages ?? [],
         readImage,
         toolNameOf,
@@ -189,7 +196,7 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
       }
       if (tools) body.tools = tools
       if (options.maxTokens) body.max_tokens = options.maxTokens
-      if (options.provider === 'codex' && options.reasoningEffort) {
+      if ((options.provider === 'codex' || options.provider === 'factory') && options.reasoningEffort) {
         body.reasoning_effort = String(options.reasoningEffort)
       }
 

@@ -10,12 +10,18 @@ const FAMILY_CONTEXT = {
   'qwen-code': 256_000,
   'kimi-code': 256_000,
   'grok-build': 256_000,
+  factory: 200_000,
   iflow: 128_000,
   [FALLBACK_PROVIDER.id]: 128_000,
 }
 
 const CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh']
+const FACTORY_EFFORTS = ['low', 'medium', 'high']
 const DEFAULT_MAX_TOKENS = 32_768
+
+function effortName(effort) {
+  return effort === 'xhigh' ? 'Extra High' : effort.charAt(0).toUpperCase() + effort.slice(1)
+}
 
 function displayName(model) {
   const raw = model.display_name || model.name
@@ -94,12 +100,8 @@ export function createProxyCatalog({ getBaseUrl, getApiKey, logger }) {
     const brand = typeof ReasoningEffortId === 'function' ? ReasoningEffortId : (id) => id
     const snap = await snapshot()
     const record = (snap.byProvider.get(provider) ?? []).find((model) => model.id === modelId)
-    const efforts = provider === 'codex'
-      ? CODEX_EFFORTS.map((effort) => ({
-        id: brand(effort),
-        name: effort === 'xhigh' ? 'Extra High' : effort.charAt(0).toUpperCase() + effort.slice(1),
-      }))
-      : []
+    const effortIds = provider === 'codex' ? CODEX_EFFORTS : provider === 'factory' ? FACTORY_EFFORTS : []
+    const efforts = effortIds.map((effort) => ({ id: brand(effort), name: effortName(effort) }))
     return {
       provider,
       id: modelId,

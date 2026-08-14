@@ -50,7 +50,7 @@ async function readBody(req) {
   }
 }
 
-export function createSubscriptionsController({ supervisor, mgmt, catalog, cursorOauth, logger }) {
+export function createSubscriptionsController({ supervisor, mgmt, catalog, cursorOauth, factory, logger }) {
   let pluginsCache = { at: 0, items: [] }
 
   async function plugins() {
@@ -103,14 +103,47 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
       })
     }
 
-    const providers = [...PROXY_PROVIDERS, FALLBACK_PROVIDER].map((descriptor) => ({
-      id: descriptor.id,
-      label: descriptor.label,
-      flow: descriptor.flow ?? 'redirect',
-      canLogin: canLogin.has(descriptor.id),
-      accounts: grouped.get(descriptor.id) ?? [],
-      models: modelsByProvider.get(descriptor.id) ?? [],
-    }))
+    let factoryInfo
+    if (factory) {
+      factoryInfo = await factory.describe().catch((error) => ({
+        accounts: [],
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    }
+
+    const providers = [...PROXY_PROVIDERS, FALLBACK_PROVIDER].map((descriptor) => {
+      if (descriptor.id === 'factory') {
+        return {
+          id: descriptor.id,
+          label: descriptor.label,
+          flow: 'token',
+          canLogin: Boolean(factory),
+          accounts: (factoryInfo?.accounts ?? []).map((account) => ({
+            name: account.name,
+            email: account.email,
+            status: account.kind === 'api-key' ? 'API Key' : account.fromCli ? 'droid CLI' : 'OAuth',
+            statusMessage: account.error ?? '',
+            disabled: account.disabled,
+            unavailable: Boolean(account.error),
+            provider: 'factory',
+            source: 'plugin',
+            success: 0,
+            failed: 0,
+            lastRefresh: account.refreshedAt ? new Date(account.refreshedAt).toISOString() : '',
+          })),
+          models: modelsByProvider.get(descriptor.id) ?? [],
+          cliAuthAvailable: factoryInfo?.cliAuthAvailable === true,
+        }
+      }
+      return {
+        id: descriptor.id,
+        label: descriptor.label,
+        flow: descriptor.flow ?? 'redirect',
+        canLogin: canLogin.has(descriptor.id),
+        accounts: grouped.get(descriptor.id) ?? [],
+        models: modelsByProvider.get(descriptor.id) ?? [],
+      }
+    })
 
     return {
       proxy,
@@ -125,6 +158,9 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
     if (providerId === 'cursor') {
       const started = await cursorOauth.startLogin()
       return { kind: 'cursor', url: started.loginUrl }
+    }
+    if (providerId === 'factory') {
+      throw new Error('Factory Droid 不走浏览器 OAuth：请在 Factory Droid 页签"从 droid CLI 导入"或粘贴 refresh token / API Key。')
     }
     const targets = loginTargets(await plugins().catch(() => []))
     const target = targets.find((entry) => entry.id === providerId)
@@ -160,6 +196,12 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
       const removed = await cursorOauth.logout(name)
       return { removed: name ? [name] : [`cursor (${removed} 个账号)`] }
     }
+    if (providerId === 'factory') {
+      const removed = await factory.remove(name)
+      void factory.sync()
+      catalog.invalidate()
+      return { removed: removed > 0 ? [name ?? `factory (${removed} 个账号)`] : [] }
+    }
     const files = await mgmt.authFiles()
     const matches = files.filter((file) => (
       providerForChannel(file.provider) === providerId
@@ -178,11 +220,25 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
       await cursorOauth.setAccountDisabled(name, disabled)
       return
     }
+    if (providerId === 'factory') {
+      await factory.setDisabled(name, disabled)
+      void factory.sync()
+      catalog.invalidate()
+      return
+    }
     await mgmt.setAuthFileDisabled(name, disabled)
     catalog.invalidate()
   }
 
-  return { overview, login, loginStatus, logout, setAccountDisabled, plugins }
+  async function factoryAdd(mode, value) {
+    if (!factory) throw new Error('Factory Droid 管理器未初始化')
+    const result = await factory.add(mode, value)
+    void factory.sync()
+    catalog.invalidate()
+    return result
+  }
+
+  return { overview, login, loginStatus, logout, setAccountDisabled, factoryAdd, plugins }
 }
 
 export function createSubscriptionsHandler(controller, { supervisor, mgmt, catalog }) {
@@ -221,6 +277,11 @@ export function createSubscriptionsHandler(controller, { supervisor, mgmt, catal
       if (path === '/subscriptions/api/logout' && method === 'POST') {
         const body = await readBody(req)
         json(res, 200, await controller.logout(String(body.provider ?? ''), body.name ? String(body.name) : undefined))
+        return
+      }
+      if (path === '/subscriptions/api/factory/add' && method === 'POST') {
+        const body = await readBody(req)
+        json(res, 200, await controller.factoryAdd(String(body.mode ?? ''), body.value))
         return
       }
       if (path === '/subscriptions/api/account' && method === 'POST') {
@@ -436,6 +497,24 @@ function renderSubscriptionsPage() {
       }
     }
 
+    async function doFactoryAdd(mode) {
+      const input = document.getElementById('factory-token');
+      const value = input ? input.value.trim() : '';
+      if (mode !== 'import' && !value) {
+        notify('请先粘贴 refresh token 或 API Key。', true);
+        return;
+      }
+      try {
+        notify(mode === 'import' ? '正在从 droid CLI 导入…' : '正在验证并添加…');
+        const result = await post('/subscriptions/api/factory/add', { mode, value });
+        notify('已添加 Factory 账号：' + (result.email || '') + '，模型稍后出现在列表中。');
+        if (input) input.value = '';
+        refresh();
+      } catch (error) {
+        notify('添加失败：' + error.message, true);
+      }
+    }
+
     function tabsOf(data) {
       const cursorCount = (data.cursor.accounts || []).length || (data.cursor.status === 'logged-in' ? 1 : 0);
       const tabs = [{ id: 'cursor', label: 'Cursor', count: cursorCount }];
@@ -521,6 +600,55 @@ function renderSubscriptionsPage() {
           : null);
     }
 
+    function factoryPanel(provider) {
+      const count = provider.accounts.length;
+      const rows = provider.accounts.map((account) => {
+        const label = account.email || account.name;
+        const dotClass = account.disabled ? 'warn' : account.unavailable ? 'err' : 'ok';
+        const dot = account.disabled ? '⏸ ' : account.unavailable ? '✕ ' : '● ';
+        const meta = el('span', { class: 'meta' },
+          el('span', { class: dotClass }, dot),
+          el('span', {}, label),
+          el('span', { class: 'muted' }, account.status));
+        if (account.statusMessage) meta.append(el('span', { class: 'err' }, account.statusMessage));
+        if (account.disabled) meta.append(el('span', { class: 'warn' }, '已停用'));
+        return el('li', {},
+          meta,
+          el('span', { class: 'actions' },
+            el('button', { class: 'small', onclick: () => doToggle('factory', account.name, !account.disabled) },
+              account.disabled ? '启用' : '停用'),
+            el('button', { class: 'small', onclick: () => doLogout('factory', account.name, 'Factory Droid · ' + label) }, '退出')));
+      });
+
+      const addRow = el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center' },
+        el('input', {
+          id: 'factory-token', type: 'password', placeholder: '粘贴 WorkOS refresh token 或 Factory API Key',
+          style: 'flex:1;min-width:220px;padding:7px 10px;border-radius:9px;border:1px solid var(--btn-border);background:var(--btn);color:var(--text);font:inherit',
+        }),
+        el('button', { class: 'small', onclick: () => doFactoryAdd('refresh-token') }, '以 Refresh Token 添加'),
+        el('button', { class: 'small', onclick: () => doFactoryAdd('api-key') }, '以 API Key 添加'),
+        provider.cliAuthAvailable
+          ? el('button', { class: 'small primary', onclick: () => doFactoryAdd('import') }, '从 droid CLI 导入')
+          : null);
+
+      return el('div', { class: 'card' },
+        el('div', { class: 'row' },
+          el('div', {},
+            el('div', { class: 'title' }, 'Factory Droid'),
+            el('div', { class: 'muted' }, count > 0 ? count + ' 个账号 · 请求自动轮询' : '未登录 · 复用 droid CLI 的订阅')),
+          null),
+        rows.length > 0 ? el('ul', { class: 'accounts' }, ...rows) : null,
+        addRow,
+        el('div', { class: 'faint' },
+          provider.cliAuthAvailable
+            ? '检测到 ~/.factory/auth.json，可一键导入 droid CLI 登录（token 每 6 小时自动刷新，droid CLI 保持可用）。'
+            : '在任意机器运行 droid CLI 登录后，复制 ~/.factory/auth.json 里的 refresh_token 粘贴到上方即可。'),
+        provider.models.length > 0
+          ? el('div', { class: 'faint' }, '模型 ' + provider.models.length + ' 个：'
+            + provider.models.slice(0, 12).join(', ') + (provider.models.length > 12 ? ' …' : ''))
+          : null);
+    }
+
     function render(data) {
       lastData = data;
       const [phaseText, phaseClass] = phaseLabel(data.proxy);
@@ -546,7 +674,11 @@ function renderSubscriptionsPage() {
       }, tab.count > 0 ? tab.label + ' (' + tab.count + ')' : tab.label)));
 
       const provider = data.providers.find((entry) => entry.id === currentTab);
-      const panel = currentTab === 'cursor' ? cursorPanel(data) : provider ? providerPanel(provider) : null;
+      const panel = currentTab === 'cursor'
+        ? cursorPanel(data)
+        : provider
+          ? (provider.id === 'factory' ? factoryPanel(provider) : providerPanel(provider))
+          : null;
 
       const notes = [];
       if (data.managementError) {
