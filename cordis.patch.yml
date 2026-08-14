@@ -1,0 +1,13 @@
+# Cursor models as a first-class DSH provider route.
+# Inserted after dsh-base so the Models page and agent loop can select `cursor`.
+
+- insert:
+    - id: llm-cursor
+      name: dsh-llm-cursor
+
+# New sessions default to a Cursor model. Override in the profile
+# cordis.patch.yml or Settings → Models if you want DeepSeek back.
+- id: agent-default-model
+  config:
+    provider: cursor
+    model: composer-2.5

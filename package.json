@@ -1,0 +1,41 @@
+{
+  "name": "dsh-llm-cursor",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness LLM adapter that drives DSH with Cursor models via @cursor/sdk",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "adapter.js",
+    "session.js",
+    "prompt.js",
+    "host.js",
+    "oauth.js",
+    "catalog.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.24"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cursor",
+    "llm-adapter"
+  ]
+}
