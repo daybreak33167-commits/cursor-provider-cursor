@@ -59,9 +59,9 @@ export const PROXY_PROVIDERS = [
     match: (model) => /^grok/.test(model),
   },
   {
-    // Factory Droid: no CLIProxyAPI OAuth route. Tokens are managed by this
-    // plugin (cliproxy/factory.js) and injected as custom upstreams; models
-    // are exposed under factory-* aliases.
+    // Factory Droid: tokens + models + LLM + web search are owned by this
+    // plugin directly (no CLIProxyAPI). Optional CPA sync remains available
+    // when cliproxy.mode is managed/external.
     id: 'factory',
     label: 'Factory Droid',
     authPath: undefined,
@@ -83,7 +83,15 @@ export const PROXY_PROVIDERS = [
 // (openai-compatibility passthroughs, CLIProxyAPI plugin channels, ...).
 export const FALLBACK_PROVIDER = { id: 'cliproxy', label: 'CLIProxyAPI' }
 
+/** Providers whose LLM traffic goes through CLIProxyAPI (excludes Factory). */
+export const CPA_PROVIDER_IDS = [
+  ...PROXY_PROVIDERS.filter((entry) => entry.id !== 'factory').map((entry) => entry.id),
+  FALLBACK_PROVIDER.id,
+]
+
 export const ALL_PROVIDER_IDS = [...PROXY_PROVIDERS.map((entry) => entry.id), FALLBACK_PROVIDER.id]
+
+export const FACTORY_PROVIDER_ID = 'factory'
 
 export function providerById(id) {
   return PROXY_PROVIDERS.find((entry) => entry.id === id)

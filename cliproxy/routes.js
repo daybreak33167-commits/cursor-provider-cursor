@@ -50,7 +50,7 @@ async function readBody(req) {
   }
 }
 
-export function createSubscriptionsController({ supervisor, mgmt, catalog, cursorOauth, factory, logger }) {
+export function createSubscriptionsController({ supervisor, mgmt, catalog, cursorOauth, factory, webSearch, logger }) {
   let pluginsCache = { at: 0, items: [] }
 
   async function plugins() {
@@ -65,6 +65,7 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
 
   async function overview() {
     const proxy = supervisor.status()
+    const proxyOff = proxy?.mode === 'off' || proxy?.phase === 'off' || proxy?.phase === 'idle'
     const cursor = await cursorOauth.publicStatus().catch((error) => ({
       status: 'unknown',
       error: error instanceof Error ? error.message : String(error),
@@ -72,13 +73,15 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
 
     let accounts = []
     let managementError
-    try {
-      accounts = await mgmt.authFiles()
-    } catch (error) {
-      managementError = error instanceof Error ? error.message : String(error)
+    if (!proxyOff) {
+      try {
+        accounts = await mgmt.authFiles()
+      } catch (error) {
+        managementError = error instanceof Error ? error.message : String(error)
+      }
     }
 
-    const targets = loginTargets(await plugins().catch(() => []))
+    const targets = proxyOff ? [] : loginTargets(await plugins().catch(() => []))
     const canLogin = new Set(targets.map((target) => target.id))
 
     const modelOverview = await catalog.overview().catch(() => ({ providers: [], error: undefined }))
@@ -145,13 +148,30 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
       }
     })
 
+    const search = await (async () => {
+      try {
+        const api = typeof webSearch === 'function' ? webSearch() : webSearch
+        if (typeof api?.describe === 'function') return await api.describe()
+        return api?.status?.() ?? null
+      } catch {
+        return null
+      }
+    })()
+
     return {
       proxy,
       cursor,
       providers,
+      search,
       managementError,
       catalogError: modelOverview.error,
     }
+  }
+
+  function setSearchProvider(providerId, model) {
+    const api = typeof webSearch === 'function' ? webSearch() : webSearch
+    if (!api?.setPreferred) throw new Error('搜索服务尚未就绪')
+    return api.setPreferred(providerId, model)
   }
 
   async function login(providerId) {
@@ -238,7 +258,7 @@ export function createSubscriptionsController({ supervisor, mgmt, catalog, curso
     return result
   }
 
-  return { overview, login, loginStatus, logout, setAccountDisabled, factoryAdd, plugins }
+  return { overview, login, loginStatus, logout, setAccountDisabled, factoryAdd, setSearchProvider, plugins }
 }
 
 export function createSubscriptionsHandler(controller, { supervisor, mgmt, catalog }) {
@@ -301,6 +321,19 @@ export function createSubscriptionsHandler(controller, { supervisor, mgmt, catal
       }
       if (path === '/subscriptions/api/models' && method === 'GET') {
         json(res, 200, await catalog.overview())
+        return
+      }
+      if (path === '/subscriptions/api/search' && method === 'GET') {
+        const data = await controller.overview()
+        json(res, 200, data?.search ?? { preferred: 'grok', active: null, backends: [], groups: [] })
+        return
+      }
+      if (path === '/subscriptions/api/search' && method === 'POST') {
+        const body = await readBody(req)
+        json(res, 200, await controller.setSearchProvider(
+          String(body.provider ?? ''),
+          body.model != null ? String(body.model) : undefined,
+        ))
         return
       }
       json(res, 404, { error: 'not found' })
@@ -663,6 +696,43 @@ function renderSubscriptionsPage() {
               phaseText + (data.proxy.error ? '：' + data.proxy.error : ''))),
           el('button', { onclick: () => post('/subscriptions/api/proxy/restart').then(refresh) }, '重启代理')));
 
+      const search = data.search;
+      const searchGroups = search && search.groups ? search.groups : [];
+      const searchSelect = el('select', {
+        style: 'min-width:260px;padding:6px 10px;border-radius:9px;font:inherit;font-size:13px',
+        onchange: (event) => {
+          const value = event.target.value;
+          const index = value.indexOf(':');
+          if (index < 0) return;
+          post('/subscriptions/api/search', {
+            provider: value.slice(0, index),
+            model: value.slice(index + 1),
+          }).then(refresh).catch((error) => notify(error.message, true));
+        },
+      });
+      for (const group of searchGroups) {
+        const optgroup = el('optgroup', { label: group.available ? group.label : group.label + ' · 不可用' });
+        for (const model of group.models || []) {
+          const option = el('option', { value: group.id + ':' + model.id }, model.name);
+          if (group.available === false) option.disabled = true;
+          if (search.preferred === group.id && search.preferredModel === model.id) option.selected = true;
+          optgroup.append(option);
+        }
+        searchSelect.append(optgroup);
+      }
+      const activeGroup = searchGroups.find((group) => group.id === (search && search.active));
+      const activeModel = activeGroup && (activeGroup.models || []).find((item) => item.id === search.activeModel);
+      const searchStrip = search ? el('div', { class: 'card' },
+        el('div', { class: 'row' },
+          el('div', {},
+            el('span', { class: 'title' }, '搜索模型'),
+            el('span', { class: 'muted', style: 'margin-left:10px' },
+              search.active && activeModel
+                ? ('当前使用 ' + (activeGroup.label || search.active) + ' · ' + activeModel.name)
+                : (search.active ? ('当前使用 ' + search.active) : '当前无可用模型'))),
+          searchGroups.length > 0 ? searchSelect : el('span', { class: 'muted' }, '暂无可用搜索模型')))
+        : null;
+
       const tabs = tabsOf(data);
       if (!currentTab || !tabs.some((tab) => tab.id === currentTab)) {
         const active = tabs.find((tab) => tab.count > 0) || tabs[0];
@@ -685,7 +755,7 @@ function renderSubscriptionsPage() {
         notes.push(el('div', { class: 'card' },
           el('span', { class: 'err' }, '管理 API 不可用：' + data.managementError)));
       }
-      app.replaceChildren(proxyStrip, tabBar, ...[panel, ...notes].filter(Boolean));
+      app.replaceChildren(proxyStrip, searchStrip, tabBar, ...[panel, ...notes].filter(Boolean));
     }
 
     async function refresh() {

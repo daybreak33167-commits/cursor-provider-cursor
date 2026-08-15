@@ -1,9 +1,64 @@
 import { sanitizeToolName } from '../cursor/prompt.js'
 import { providerLabel } from './providers.js'
+import { proxyEffortValue } from './catalog.js'
 
 // Factory validates that requests come from its own agent; the droid CLI (and
 // droid2api) prepend this identity line to every system prompt.
 const DROID_SYSTEM_PREFIX = 'You are Droid, an AI software engineering agent built by Factory.\n\n'
+
+function factoryModelId(model) {
+  return String(model ?? '').replace(/^factory-/, '')
+}
+
+/** GPT / Codex Factory models must use Responses with Droid `instructions`. */
+function isFactoryResponsesModel(provider, model) {
+  if (provider !== 'factory') return false
+  const id = factoryModelId(model)
+  return id.startsWith('gpt-') || id.endsWith('-codex')
+}
+
+function textContentOf(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      if (part?.type === 'text' || part?.type === 'input_text' || part?.type === 'output_text') {
+        return part.text ?? ''
+      }
+      return ''
+    })
+    .join('')
+}
+
+function toResponsesInput(messages) {
+  const input = []
+  for (const message of messages ?? []) {
+    if (!message || message.role === 'system') continue
+    const text = textContentOf(message.content)
+    if (message.role === 'assistant') {
+      if (!text && !message.tool_calls?.length) continue
+      if (text) {
+        input.push({
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        })
+      }
+      // Function-call history for Responses is a larger mapping; text turns are enough
+      // for the common Factory chat path. Tool rounds still go through Claude/Core models.
+      continue
+    }
+    if (message.role === 'user' && text) {
+      input.push({
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text }],
+      })
+    }
+  }
+  return input
+}
 
 function dataUrl(image) {
   return `data:${image.mimeType || 'image/png'};base64,${image.data}`
@@ -174,6 +229,11 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
     }
 
     async * stream(options) {
+      if (isFactoryResponsesModel(options.provider, options.model)) {
+        yield* this.streamFactoryResponses(options)
+        return
+      }
+
       const readImage = this.makeImageReader(options)
       const aliases = new Map()
       const toolNameOf = (name) => sanitizeToolName(name)
@@ -196,8 +256,9 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
       }
       if (tools) body.tools = tools
       if (options.maxTokens) body.max_tokens = options.maxTokens
-      if ((options.provider === 'codex' || options.provider === 'factory') && options.reasoningEffort) {
-        body.reasoning_effort = String(options.reasoningEffort)
+      if ((options.provider === 'codex' || options.provider === 'factory' || options.provider === 'claude-code') && options.reasoningEffort) {
+        const effort = proxyEffortValue(options.reasoningEffort)
+        if (effort && effort !== 'default') body.reasoning_effort = effort
       }
 
       const base = this.hooks.getBaseUrl().replace(/\/+$/, '')
@@ -224,6 +285,129 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
         )
       }
 
+      yield* this.consumeChatCompletionsStream(response, options, aliases)
+    }
+
+    async * streamFactoryResponses(options) {
+      const readImage = this.makeImageReader(options)
+      const system = DROID_SYSTEM_PREFIX + (options.system ?? '')
+      const messages = await toOpenAiMessages({
+        system: undefined,
+        messages: options.messages ?? [],
+        readImage,
+        toolNameOf: (name) => sanitizeToolName(name),
+      })
+      const body = {
+        model: options.model,
+        instructions: system,
+        input: toResponsesInput(messages),
+        stream: true,
+        store: false,
+      }
+      if (options.maxTokens) body.max_output_tokens = Math.max(16, options.maxTokens)
+      if (options.reasoningEffort) {
+        const effort = proxyEffortValue(options.reasoningEffort)
+        if (effort && effort !== 'default') body.reasoning = { effort }
+      }
+
+      const base = this.hooks.getBaseUrl().replace(/\/+$/, '')
+      const apiKey = await this.hooks.getApiKey()
+      let response
+      try {
+        response = await fetch(`${base}/v1/responses`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: options.signal,
+        })
+      } catch (error) {
+        if (options.signal?.aborted) throw new LlmError('CLIProxyAPI request aborted', 'ABORTED', { cause: error })
+        const hint = this.hooks.describeLoginHint?.() ?? ''
+        throw new LlmError(
+          `CLIProxyAPI is unreachable at ${base}: ${error instanceof Error ? error.message : error}${hint}`,
+          'TRANSPORT',
+          { cause: error },
+        )
+      }
+
+      if (!response.ok) {
+        const raw = await response.text().catch(() => '')
+        let detail = raw.slice(0, 400)
+        try {
+          const parsed = JSON.parse(raw)
+          detail = parsed?.error?.message ?? parsed?.detail ?? parsed?.error ?? detail
+        } catch {
+          // keep raw
+        }
+        const forbidden = response.status === 403 || /forbidden/i.test(String(detail))
+        throw new LlmError(
+          `Factory Responses 请求失败 (${response.status}): ${detail}`,
+          forbidden ? 'TRANSPORT' : (response.status === 401 ? 'AUTH' : 'TRANSPORT'),
+        )
+      }
+
+      let nextIndex = 0
+      let textBlock
+      let sawContent = false
+      const open = () => nextIndex++
+
+      try {
+        for await (const data of sseEvents(response.body, options.signal)) {
+          let event
+          try {
+            event = JSON.parse(data)
+          } catch {
+            continue
+          }
+          const type = event?.type
+          if (type === 'response.output_text.delta' && typeof event.delta === 'string' && event.delta) {
+            if (!textBlock) {
+              textBlock = { index: open(), text: '' }
+              yield { type: 'block-start', index: textBlock.index, blockType: 'text' }
+            }
+            textBlock.text += event.delta
+            sawContent = true
+            yield { type: 'text-delta', index: textBlock.index, text: event.delta }
+          }
+          if (type === 'response.failed' || event?.response?.error) {
+            const message = event?.response?.error?.message ?? event?.error?.message ?? JSON.stringify(event)
+            throw new LlmError(`Factory Responses error: ${message}`, 'TRANSPORT')
+          }
+        }
+        if (textBlock) {
+          yield { type: 'block-end', index: textBlock.index, block: { type: 'text', text: textBlock.text } }
+        }
+        if (!sawContent) {
+          yield {
+            type: 'finish',
+            reason: {
+              kind: 'error',
+              failure: {
+                message: `Factory Responses returned an empty completion (model=${options.model})`,
+                code: 'EMPTY_RESPONSE',
+              },
+            },
+          }
+          return
+        }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw new LlmError('CLIProxyAPI request aborted', 'ABORTED', { cause: error })
+        }
+        if (error instanceof LlmError) throw error
+        throw new LlmError(
+          `Factory Responses stream failed: ${error instanceof Error ? error.message : error}`,
+          'TRANSPORT',
+          { cause: error },
+        )
+      }
+    }
+
+    async * consumeChatCompletionsStream(response, options, aliases) {
       if (!response.ok) {
         const raw = await response.text().catch(() => '')
         let detail = raw.slice(0, 400)
@@ -234,10 +418,15 @@ export function createProxyAdapterClass({ LlmAdapter, LlmError, CallId, Reasonin
           // keep raw slice
         }
         if (response.status === 401 || response.status === 403) {
+          const forbidden = /forbidden/i.test(String(detail))
+          // DSH GUI maps code AUTH → "API key is invalid"; Factory 403 is
+          // usually cloak/identity rejection, not a bad key — keep the detail.
           throw new LlmError(
-            `CLIProxyAPI rejected the request (${response.status}): ${detail}. `
-            + `请打开 设置 → 订阅 登录 ${providerLabel(options.provider)} 账号。`,
-            'AUTH',
+            forbidden
+              ? `Factory 网关拒绝了请求（403 Forbidden）。常见原因：CLIProxyAPI 把 system 改写成了 Claude Code 身份。详情：${detail}`
+              : `CLIProxyAPI rejected the request (${response.status}): ${detail}. `
+                + `请打开 设置 → 订阅 登录 ${providerLabel(options.provider)} 账号。`,
+            forbidden ? 'TRANSPORT' : 'AUTH',
           )
         }
         throw new LlmError(`CLIProxyAPI request failed (${response.status}): ${detail}`, 'TRANSPORT')

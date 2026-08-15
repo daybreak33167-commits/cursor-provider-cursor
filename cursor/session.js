@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { Agent } from '@cursor/sdk'
 import { buildFollowUpPrompt, buildKickoffPrompt, imageRefsOf, imageRefsOfBlocks, sanitizeToolName } from './prompt.js'
 
-const SCRATCH = join(tmpdir(), 'dsh-subscriptions-scratch')
+const SCRATCH = join(tmpdir(), 'dsh-cpa-plus-scratch')
 mkdirSync(SCRATCH, { recursive: true })
 
 const TOOL_BATCH_IDLE_MS = 40
@@ -69,6 +69,20 @@ function isThinkingEvent(event) {
 // invocations arrive through the in-process execute() callback, and discovery
 // calls are handled inside the SDK.
 const META_TOOL_NAMES = new Set(['mcp', 'getmcptools', 'callmcptool'])
+const WORKSPACE_DENY = ['shell', 'task', 'read', 'edit', 'write', 'delete', 'grep', 'glob']
+
+function agentToolOptions(allowNativeSearch) {
+  if (allowNativeSearch) {
+    return {
+      tools: ['mcp', 'webSearch', 'webFetch'],
+      disallowedTools: WORKSPACE_DENY,
+    }
+  }
+  return {
+    tools: ['mcp'],
+    disallowedTools: [...WORKSPACE_DENY, 'webSearch', 'webFetch'],
+  }
+}
 
 function isMetaToolName(name) {
   return META_TOOL_NAMES.has(String(name ?? '').toLowerCase())
@@ -137,6 +151,8 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
+    this.allowNativeSearch = options.allowNativeSearch
+    this.agentNativeSearch = undefined
   }
 
   wake() {
@@ -189,11 +205,26 @@ export class CursorSession {
     return table
   }
 
+  nativeSearchEnabled() {
+    return this.allowNativeSearch?.() === true
+  }
+
   async ensureAgent(tools) {
-    if (this.agent) return this.agent
+    const wantSearch = this.nativeSearchEnabled()
+    if (this.agent && this.agentNativeSearch === wantSearch) return this.agent
+    if (this.agent?.[Symbol.asyncDispose]) {
+      try {
+        await this.agent[Symbol.asyncDispose]()
+      } catch {
+        // Recreate below.
+      }
+      this.agent = undefined
+    }
+    const toolOpts = agentToolOptions(wantSearch)
     const createOptions = {
       model: this.modelSelection,
-      tools: ['mcp'],
+      tools: toolOpts.tools,
+      disallowedTools: toolOpts.disallowedTools,
       local: {
         cwd: SCRATCH,
         settingSources: [],
@@ -206,13 +237,13 @@ export class CursorSession {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (!/tool|disallowed|unknown/i.test(message)) throw error
-      createOptions.tools = undefined
-      createOptions.disallowedTools = [
-        'shell', 'task', 'read', 'edit', 'write', 'delete',
-        'webSearch', 'webFetch', 'grep', 'glob',
-      ]
+      createOptions.tools = wantSearch ? ['mcp'] : undefined
+      createOptions.disallowedTools = wantSearch
+        ? WORKSPACE_DENY
+        : [...WORKSPACE_DENY, 'webSearch', 'webFetch']
       this.agent = await Agent.create(createOptions)
     }
+    this.agentNativeSearch = wantSearch
     return this.agent
   }
 
@@ -261,8 +292,11 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
+    const toolOpts = agentToolOptions(this.nativeSearchEnabled())
     this.run = await agent.send(images?.length ? { text: prompt, images } : prompt, {
       model: this.modelSelection,
+      tools: toolOpts.tools,
+      disallowedTools: toolOpts.disallowedTools,
       onDelta: (args) => this.enqueueDelta(args),
       local: {
         cwd: SCRATCH,
@@ -477,6 +511,7 @@ export function getSession(key, init) {
     existing.apiKey = init.apiKey
     existing.model = init.model
     existing.modelSelection = init.modelSelection ?? existing.modelSelection
+    existing.allowNativeSearch = init.allowNativeSearch ?? existing.allowNativeSearch
     return existing
   }
   const created = new CursorSession(init)

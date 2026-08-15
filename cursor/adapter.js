@@ -66,6 +66,7 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
         modelSelection,
         contextWindow: contextForEffort(resolved, options.reasoningEffort),
         LlmError,
+        allowNativeSearch: () => this.hooks.allowNativeSearch?.() === true,
       })
 
       let nextIndex = 0

@@ -1,7 +1,7 @@
 {
-  "name": "dsh-subscriptions",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness unified subscriptions plugin: Cursor, Factory Droid, and Claude Code / Codex / Antigravity / Kimi / Grok via a managed CLIProxyAPI",
+  "name": "dsh-cpa-plus",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness subscriptions plugin: Cursor + Factory Droid + built-in managed CLIProxyAPI (Claude Code / Codex / etc.)",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -31,7 +31,8 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-model-selection"
       ]
     }
   },

@@ -23,8 +23,11 @@ const ACCOUNTS_REF = 'FACTORY_ACCOUNTS'
 const WORKOS_URL = 'https://api.workos.com/user_management/authenticate'
 // Public client id embedded in the droid CLI (same one droid2api uses).
 const WORKOS_CLIENT_ID = 'client_01HNM792M5G5G1A2THWPXKFMXB'
-const FACTORY_API = 'https://api.factory.ai/api/llm'
-const FACTORY_USER_AGENT = 'factory-cli/0.85.0'
+// Factory's LLM gateway refuses requests whose Anthropic `system` field does
+// not start with this identity line (or is empty). CPA's Claude Code cloaking
+// would replace it with "You are Claude Code…", so optional CPA sync entries
+// must set cloak.mode=never and rebuild role=system into the top-level system field.
+const FACTORY_CLOAK = { mode: 'never' }
 // Access tokens live ~8h; refresh at 6h like the droid CLI does.
 const REFRESH_AFTER_MS = 6 * 60 * 60 * 1000
 const LOOP_MS = 60_000
@@ -32,29 +35,106 @@ const VERIFY_EVERY_MS = 5 * 60_000
 const COMPAT_PROVIDER_NAME = 'factory-droid'
 
 export const FACTORY_MODEL_PREFIX = 'factory-'
+export const FACTORY_API = 'https://api.factory.ai/api/llm'
+export const FACTORY_USER_AGENT = 'factory-cli/0.175.0'
+export const DROID_SYSTEM_PREFIX = 'You are Droid, an AI software engineering agent built by Factory.\n\n'
 
-// Curated list mirroring the droid CLI's current catalog. Kept static so the
-// aliases stay stable; unavailable upstream models simply error on use.
-const FACTORY_MODELS = {
+// Curated list aligned with current droid / Factory feature flags.
+// `efforts` / `defaultEffort` mirror droid's reasoningEffort.supported (minus
+// wire-only `none`). kimi-k3 follows Moonshot: low/high/max (default max).
+const E = {
+  claudeMax: { efforts: ['off', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+  claudeHighMax: { efforts: ['off', 'low', 'medium', 'high', 'max'], defaultEffort: 'high' },
+  claudeClassic: { efforts: ['off', 'low', 'medium', 'high'], defaultEffort: 'off' },
+  gptXhigh: { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+  gptXhighMax: { efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
+  gptPro: { efforts: ['medium', 'high', 'xhigh'], defaultEffort: 'medium' },
+  gpt52: { efforts: ['off', 'low', 'medium', 'high', 'xhigh'], defaultEffort: 'low' },
+  gptMini: { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+  glm52: { efforts: ['off', 'high', 'max'], defaultEffort: 'high' },
+  kimiK3: { efforts: ['low', 'high', 'max'], defaultEffort: 'max' },
+  kimiToggle: { efforts: ['off', 'high'], defaultEffort: 'high' },
+  deepseek: { efforts: ['off', 'low', 'high', 'max'], defaultEffort: 'high' },
+  fixedHigh: { efforts: ['high'], defaultEffort: 'high' },
+  nemotron: { efforts: ['off', 'high'], defaultEffort: 'high' },
+  grok: { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+}
+
+export const FACTORY_MODELS = {
+  // Anthropic Messages → /api/llm/a  (x-api-provider: anthropic)
   anthropic: [
-    { name: 'claude-opus-4-6', display: 'Claude Opus 4.6 (Factory)' },
-    { name: 'claude-opus-4-5-20251101', display: 'Claude Opus 4.5 (Factory)' },
-    { name: 'claude-sonnet-4-6', display: 'Claude Sonnet 4.6 (Factory)' },
-    { name: 'claude-sonnet-4-5-20250929', display: 'Claude Sonnet 4.5 (Factory)' },
-    { name: 'claude-haiku-4-5-20251001', display: 'Claude Haiku 4.5 (Factory)' },
+    { name: 'claude-opus-5', display: 'Claude Opus 5 (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-5-fast', display: 'Claude Opus 5 Fast (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-4-8', display: 'Claude Opus 4.8 (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-4-8-fast', display: 'Claude Opus 4.8 Fast (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-4-7', display: 'Claude Opus 4.7 (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-4-7-fast', display: 'Claude Opus 4.7 Fast (Factory)', ...E.claudeMax },
+    { name: 'claude-opus-4-6', display: 'Claude Opus 4.6 (Factory)', ...E.claudeHighMax },
+    { name: 'claude-sonnet-5', display: 'Claude Sonnet 5 (Factory)', ...E.claudeMax },
+    { name: 'claude-fable-5', display: 'Claude Fable 5 (Factory)', ...E.claudeMax },
+    { name: 'claude-sonnet-4-6', display: 'Claude Sonnet 4.6 (Factory)', ...E.claudeHighMax },
+    { name: 'claude-opus-4-5-20251101', display: 'Claude Opus 4.5 (Factory)', ...E.claudeClassic },
+    { name: 'claude-sonnet-4-5-20250929', display: 'Claude Sonnet 4.5 (Factory)', ...E.claudeClassic },
+    { name: 'claude-haiku-4-5-20251001', display: 'Claude Haiku 4.5 (Factory)', ...E.claudeClassic },
   ],
+  // OpenAI Responses → /api/llm/o/v1  (x-api-provider: openai)
   openai: [
-    { name: 'gpt-5.4', display: 'GPT-5.4 (Factory)' },
-    { name: 'gpt-5.4-mini', display: 'GPT-5.4 mini (Factory)' },
-    { name: 'gpt-5.3-codex', display: 'GPT-5.3 Codex (Factory)' },
-    { name: 'gpt-5.2', display: 'GPT-5.2 (Factory)' },
-    { name: 'gpt-5.2-codex', display: 'GPT-5.2 Codex (Factory)' },
+    { name: 'gpt-5.6-sol', display: 'GPT-5.6 Sol (Factory)', ...E.gptXhighMax },
+    { name: 'gpt-5.6-luna', display: 'GPT-5.6 Luna (Factory)', ...E.gptXhighMax },
+    { name: 'gpt-5.6-terra', display: 'GPT-5.6 Terra (Factory)', ...E.gptXhighMax },
+    { name: 'gpt-5.5', display: 'GPT-5.5 (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.5-fast', display: 'GPT-5.5 Fast (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.5-pro', display: 'GPT-5.5 Pro (Factory)', ...E.gptPro },
+    { name: 'gpt-5.4', display: 'GPT-5.4 (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.4-fast', display: 'GPT-5.4 Fast (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.4-mini', display: 'GPT-5.4 mini (Factory)', ...E.gptMini },
+    { name: 'gpt-5.3-codex', display: 'GPT-5.3 Codex (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.3-codex-fast', display: 'GPT-5.3 Codex Fast (Factory)', ...E.gptXhigh },
+    { name: 'gpt-5.2', display: 'GPT-5.2 (Factory)', ...E.gpt52 },
   ],
+  // Chat Completions / Droid Core → /api/llm/o/v1  (x-api-provider: fireworks)
   common: [
-    { name: 'glm-5', display: 'GLM-5 (Factory)' },
-    { name: 'glm-4.7', display: 'GLM-4.7 (Factory)' },
-    { name: 'kimi-k2.5', display: 'Kimi K2.5 (Factory)' },
+    { name: 'glm-5.2', display: 'GLM-5.2 (Factory Core)', ...E.glm52 },
+    { name: 'glm-5.2-fast', display: 'GLM-5.2 Fast (Factory Core)', ...E.glm52 },
+    { name: 'kimi-k3', display: 'Kimi K3 (Factory Core)', ...E.kimiK3 },
+    { name: 'kimi-k2.7-code', display: 'Kimi K2.7 Code (Factory Core)', ...E.kimiToggle },
+    { name: 'kimi-k2.6', display: 'Kimi K2.6 (Factory Core)', ...E.kimiToggle },
+    { name: 'deepseek-v4-pro', display: 'DeepSeek V4 Pro (Factory Core)', ...E.deepseek },
+    { name: 'minimax-m3', display: 'MiniMax M3 (Factory Core)', ...E.fixedHigh },
+    { name: 'minimax-m2.7', display: 'MiniMax M2.7 (Factory Core)', ...E.fixedHigh },
+    { name: 'nemotron-3-ultra', display: 'Nemotron 3 Ultra (Factory Core)', ...E.nemotron },
   ],
+  // xAI Responses → /api/llm/o/v1/responses  (x-api-provider: xai)
+  xai: [
+    { name: 'grok-4.6', display: 'Grok 4.6 (Factory)', ...E.grok },
+    { name: 'grok-4.5', display: 'Grok 4.5 (Factory)', ...E.grok },
+  ],
+}
+
+export function factoryModelKind(modelId) {
+  const name = String(modelId ?? '').replace(/^factory-/, '')
+  if (FACTORY_MODELS.anthropic.some((m) => m.name === name)) return 'anthropic'
+  if (FACTORY_MODELS.openai.some((m) => m.name === name)) return 'openai'
+  if (FACTORY_MODELS.xai.some((m) => m.name === name)) return 'xai'
+  if (FACTORY_MODELS.common.some((m) => m.name === name)) return 'common'
+  // Heuristic fallback for unknown aliases.
+  if (name.startsWith('claude-')) return 'anthropic'
+  if (name.startsWith('gpt-') || name.endsWith('-codex')) return 'openai'
+  if (name.startsWith('grok')) return 'xai'
+  return 'common'
+}
+
+export function factoryUpstreamModelId(modelId) {
+  return String(modelId ?? '').replace(/^factory-/, '')
+}
+
+export function allFactoryModelEntries() {
+  return [
+    ...FACTORY_MODELS.anthropic.map((m) => ({ ...m, kind: 'anthropic' })),
+    ...FACTORY_MODELS.openai.map((m) => ({ ...m, kind: 'openai' })),
+    ...FACTORY_MODELS.xai.map((m) => ({ ...m, kind: 'xai' })),
+    ...FACTORY_MODELS.common.map((m) => ({ ...m, kind: 'common' })),
+  ]
 }
 
 export function factoryAuthJsonPath() {
@@ -415,6 +495,39 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
     return (cache ?? []).filter((account) => !account.disabled && bearerOf(account))
   }
 
+  /** Sync: first usable Factory bearer present in the in-memory account cache. */
+  function hasActiveBearer() {
+    return activeAccounts().length > 0
+  }
+
+  /** Async: ensure accounts are loaded, then return the first usable bearer. */
+  async function resolveBearer() {
+    await load()
+    const [first] = activeAccounts()
+    return first ? bearerOf(first) : undefined
+  }
+
+  /** Async: first active account (for request headers / session ids). */
+  async function resolveAccount() {
+    await load()
+    return activeAccounts()[0]
+  }
+
+  function requestHeaders(account, apiProvider) {
+    const token = bearerOf(account)
+    return {
+      authorization: `Bearer ${token}`,
+      'x-api-key': token,
+      'x-api-provider': apiProvider,
+      'x-factory-client': 'cli',
+      'x-session-id': account.sessionId,
+      'x-assistant-message-id': account.messageId,
+      'user-agent': FACTORY_USER_AGENT,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    }
+  }
+
   function factoryHeaders(account, provider) {
     return {
       authorization: `Bearer ${bearerOf(account)}`,
@@ -431,6 +544,10 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
     return activeAccounts().map((account) => ({
       'api-key': bearerOf(account),
       'base-url': `${FACTORY_API}/a`,
+      // Prevent CPA from rewriting system into Claude Code identity (→ Factory 403).
+      cloak: FACTORY_CLOAK,
+      'rebuild-mid-system-message': true,
+      'disable-cooling': true,
       headers: factoryHeaders(account, 'anthropic'),
       models: FACTORY_MODELS.anthropic.map((model) => ({
         name: model.name,
@@ -445,12 +562,15 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
     return activeAccounts().map((account) => ({
       'api-key': bearerOf(account),
       'base-url': `${FACTORY_API}/o/v1`,
+      'disable-cooling': true,
       headers: factoryHeaders(account, 'openai'),
       models: FACTORY_MODELS.openai.map((model) => ({
         name: model.name,
         alias: aliasOf(model.name),
         'display-name': model.display,
         'force-mapping': true,
+        // Keep caller system/instructions (Droid identity) instead of Codex cloak.
+        'is-compat': true,
       })),
     }))
   }
@@ -485,9 +605,14 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
       'api-key': entry?.['api-key'] ?? '',
       'base-url': entry?.['base-url'] ?? '',
       headers: entry?.headers ?? {},
+      cloak: entry?.cloak ?? null,
+      'rebuild-mid-system-message': entry?.['rebuild-mid-system-message'] === true,
+      'disable-cooling': entry?.['disable-cooling'] === true,
       models: (entry?.models ?? []).map((model) => ({
         name: model?.name ?? '',
         alias: model?.alias ?? '',
+        'display-name': model?.['display-name'] ?? '',
+        'is-compat': model?.['is-compat'] === true,
       })),
       ...entry?.name !== undefined ? { name: entry.name } : {},
       ...entry?.['api-key-entries'] !== undefined
@@ -510,6 +635,9 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
 
   async function syncNow() {
     await load()
+    // Direct Factory adapter is the default path. Optional CPA mirroring only
+    // runs when a management client is wired and the proxy is ready.
+    if (!mgmt?.call || !proxyReady()) return false
     // CPA reloads config after every management write; back-to-back writes to
     // different sections race that reload and can drop model registrations
     // (verified empirically), so let each write settle before the next one.
@@ -600,7 +728,10 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
         error: account.lastError,
       })),
       cliAuthAvailable: existsSync(factoryAuthJsonPath()),
-      modelCount: FACTORY_MODELS.anthropic.length + FACTORY_MODELS.openai.length + FACTORY_MODELS.common.length,
+      modelCount: FACTORY_MODELS.anthropic.length
+        + FACTORY_MODELS.openai.length
+        + FACTORY_MODELS.xai.length
+        + FACTORY_MODELS.common.length,
     }
   }
 
@@ -623,5 +754,9 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
     sync,
     start,
     stop,
+    hasActiveBearer,
+    resolveBearer,
+    resolveAccount,
+    requestHeaders,
   }
 }

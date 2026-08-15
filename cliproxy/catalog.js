@@ -3,20 +3,21 @@ import { FALLBACK_PROVIDER, providerForModel, providerLabel } from './providers.
 const CACHE_MS = 60_000
 
 const FAMILY_CONTEXT = {
-  'claude-code': 200_000,
-  codex: 272_000,
-  antigravity: 1_000_000,
-  'gemini-cli': 1_000_000,
-  'qwen-code': 256_000,
-  'kimi-code': 256_000,
-  'grok-build': 256_000,
-  factory: 200_000,
-  iflow: 128_000,
-  [FALLBACK_PROVIDER.id]: 128_000,
+  'claude-code': { window: 200_000, maxWindow: 1_000_000 },
+  codex: { window: 272_000, maxWindow: 272_000 },
+  antigravity: { window: 1_000_000, maxWindow: 1_000_000 },
+  'gemini-cli': { window: 1_000_000, maxWindow: 1_000_000 },
+  'qwen-code': { window: 256_000, maxWindow: 256_000 },
+  'kimi-code': { window: 256_000, maxWindow: 256_000 },
+  'grok-build': { window: 256_000, maxWindow: 256_000 },
+  factory: { window: 200_000, maxWindow: 1_000_000 },
+  iflow: { window: 128_000, maxWindow: 128_000 },
+  [FALLBACK_PROVIDER.id]: { window: 128_000, maxWindow: 128_000 },
 }
 
 const CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh']
 const FACTORY_EFFORTS = ['low', 'medium', 'high']
+const CLAUDE_EFFORTS = ['low', 'medium', 'high']
 const DEFAULT_MAX_TOKENS = 32_768
 
 function effortName(effort) {
@@ -27,6 +28,72 @@ function displayName(model) {
   const raw = model.display_name || model.name
   if (raw && String(raw).trim()) return String(raw).trim()
   return String(model.id)
+}
+
+function familyLimits(provider) {
+  return FAMILY_CONTEXT[provider] ?? FAMILY_CONTEXT[FALLBACK_PROVIDER.id]
+}
+
+function effortIdsFor(provider) {
+  if (provider === 'codex') return CODEX_EFFORTS
+  if (provider === 'factory') return FACTORY_EFFORTS
+  if (provider === 'claude-code') return CLAUDE_EFFORTS
+  return []
+}
+
+/** Strip UI compound ids down to the upstream reasoning_effort value. */
+export function proxyEffortValue(reasoningEffort) {
+  if (!reasoningEffort) return undefined
+  const raw = String(reasoningEffort)
+  if (raw.includes('=')) {
+    for (const part of raw.split('|')) {
+      if (part.startsWith('effort=')) return part.slice('effort='.length)
+    }
+    return raw.split('|')[0]
+  }
+  // Compound ids are `effort` or `effort|ctxmax` (context flag must not be
+  // mistaken for thinking level `max`).
+  const effort = raw.split('|')[0]
+  if (!effort || effort === 'default' || effort === 'ctxmax') return undefined
+  return effort
+}
+
+function buildReasoning(provider, ReasoningEffortId) {
+  const brand = typeof ReasoningEffortId === 'function' ? ReasoningEffortId : (id) => id
+  const limits = familyLimits(provider)
+  const baseK = Math.round(limits.window / 1000)
+  const maxK = Math.round(limits.maxWindow / 1000)
+  const contexts = limits.maxWindow > limits.window
+    ? [
+      { flag: '', label: `${baseK}K`, window: limits.window },
+      { flag: 'max', label: `Max ${maxK}K`, window: limits.maxWindow },
+    ]
+    : [{ flag: '', label: `${baseK}K`, window: limits.window }]
+
+  const effortIds = effortIdsFor(provider)
+  const levels = effortIds.length > 0 ? effortIds : ['default']
+  const efforts = []
+  for (const effort of levels) {
+    for (const context of contexts) {
+      const effortLabel = effort === 'default' ? 'Default' : effortName(effort)
+      const id = context.flag
+        ? (effort === 'default' ? `default|${context.flag}` : `${effort}|${context.flag}`)
+        : (effort === 'default' ? 'default' : effort)
+      efforts.push({
+        id: brand(id),
+        name: `${effortLabel} · ${context.label}`,
+        description: `effort:${effortLabel}|context:${context.label}|ctx:${context.window}`,
+      })
+    }
+  }
+  const defaultId = effortIds.includes('medium')
+    ? brand('medium')
+    : efforts[0]?.id
+  return {
+    efforts,
+    ...defaultId ? { defaultEffort: defaultId } : {},
+    contextWindow: limits.maxWindow,
+  }
 }
 
 export function createProxyCatalog({ getBaseUrl, getApiKey, logger }) {
@@ -97,23 +164,22 @@ export function createProxyCatalog({ getBaseUrl, getApiKey, logger }) {
   }
 
   async function resolveModel(provider, modelId, ReasoningEffortId) {
-    const brand = typeof ReasoningEffortId === 'function' ? ReasoningEffortId : (id) => id
     const snap = await snapshot()
     const record = (snap.byProvider.get(provider) ?? []).find((model) => model.id === modelId)
-    const effortIds = provider === 'codex' ? CODEX_EFFORTS : provider === 'factory' ? FACTORY_EFFORTS : []
-    const efforts = effortIds.map((effort) => ({ id: brand(effort), name: effortName(effort) }))
+    const reasoning = buildReasoning(provider, ReasoningEffortId)
     return {
       provider,
       id: modelId,
       name: record?.name ?? modelId,
       inputModalities: ['text', 'image'],
       context: {
-        contextWindow: FAMILY_CONTEXT[provider] ?? FAMILY_CONTEXT[FALLBACK_PROVIDER.id],
+        contextWindow: reasoning.contextWindow,
       },
       defaultMaxTokens: DEFAULT_MAX_TOKENS,
-      ...efforts.length > 0
-        ? { reasoning: { efforts, defaultEffort: brand('medium') } }
-        : {},
+      reasoning: {
+        efforts: reasoning.efforts,
+        ...reasoning.defaultEffort ? { defaultEffort: reasoning.defaultEffort } : {},
+      },
     }
   }
 

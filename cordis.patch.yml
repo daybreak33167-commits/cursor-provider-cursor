@@ -1,10 +1,19 @@
-# Unified subscriptions plugin: Cursor models plus CLIProxyAPI-backed
-# subscription providers (Claude Code / Codex / Antigravity / Kimi / Grok).
+# Unified subscriptions plugin: Cursor + Factory Droid + built-in CLIProxyAPI.
 # Inserted after dsh-base so the Models page and agent loop can select them.
 
 - insert:
     - id: subscriptions
-      name: dsh-subscriptions
+      name: dsh-cpa-plus
+      config:
+        cliproxy:
+          # CPA is part of this plugin: download, host, and manage locally.
+          mode: managed
+
+# Route web_search through the subscriptions router (settings UI picks Grok /
+# Factory / DeepSeek). Do not pin a single backend here.
+- id: web
+  config:
+    searchProvider: subscriptions
 
 # New sessions default to a Cursor model. Override in the profile
 # cordis.patch.yml or Settings -> Models if you want DeepSeek back.

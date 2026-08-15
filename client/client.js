@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-subscriptions',
+  id: 'dsh-cpa-plus',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -70,6 +70,17 @@ window.__ModuleLoader__.load({
       stats: { color: palette.faint, fontSize: 12 },
       code: { color: palette.text, background: palette.codeBg, borderRadius: 6, padding: '1px 6px', fontFamily: 'ui-monospace, monospace' },
       notice: { marginTop: 10, fontSize: 13 },
+      searchSelect: {
+        minWidth: 260,
+        maxWidth: '100%',
+        padding: '6px 10px',
+        borderRadius: 9,
+        border: `1px solid ${palette.buttonBorder}`,
+        background: palette.buttonBg,
+        color: palette.text,
+        font: 'inherit',
+        fontSize: 13,
+      },
     }
 
     async function api(path, options) {
@@ -285,6 +296,23 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const selectSearch = async (providerId, modelId) => {
+        setBusy(`search:${providerId}`)
+        setNotice(undefined)
+        try {
+          const next = await post('/subscriptions/api/search', { provider: providerId, model: modelId })
+          setData((prev) => (prev ? { ...prev, search: next } : prev))
+          const group = next.groups?.find((entry) => entry.id === providerId)
+          const model = group?.models?.find((item) => item.id === (next.preferredModel || modelId))
+          const label = [group?.label || providerId, model?.name || next.preferredModel].filter(Boolean).join(' · ')
+          setNotice({ text: `搜索已切换为 ${label}`, kind: 'ok' })
+        } catch (cause) {
+          setNotice({ text: `切换搜索失败：${cause.message}`, kind: 'err' })
+        } finally {
+          setBusy('')
+        }
+      }
+
       const header = h('div', null,
         h('div', { style: styles.headRow },
           h('h1', { style: styles.h1 }, '订阅'),
@@ -314,6 +342,54 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...phaseStyle, marginLeft: 10, fontSize: 13 } },
               phaseText + (data.proxy.error ? `：${data.proxy.error}` : ''))),
           h(Button, { onClick: restartProxy, disabled: busy === 'proxy:restart' }, '重启代理')))
+
+      const search = data.search
+      const searchGroups = search?.groups ?? []
+      const searchValue = (() => {
+        const preferred = search?.preferred && search?.preferredModel
+          ? `${search.preferred}:${search.preferredModel}`
+          : ''
+        const inList = searchGroups.some((group) => (
+          group.id === search?.preferred
+          && (group.models || []).some((model) => model.id === search?.preferredModel)
+        ))
+        if (inList) return preferred
+        if (search?.active && search?.activeModel) return `${search.active}:${search.activeModel}`
+        return preferred
+      })()
+      const activeGroup = searchGroups.find((group) => group.id === search?.active)
+      const activeModel = activeGroup?.models?.find((item) => item.id === search?.activeModel)
+      const searchStrip = search ? h('div', { style: styles.card },
+        h('div', { style: styles.row },
+          h('div', null,
+            h('span', { style: styles.title }, '搜索模型'),
+            h('span', { style: { ...styles.muted, marginLeft: 10 } },
+              search.active && activeModel
+                ? `当前使用 ${activeGroup?.label || search.active} · ${activeModel.name}`
+                : search.active
+                  ? `当前使用 ${search.backends?.find((b) => b.id === search.active)?.label || search.active}`
+                  : '当前无可用模型')),
+          searchGroups.length > 0
+            ? h('select', {
+              style: styles.searchSelect,
+              value: searchValue,
+              disabled: busy.startsWith('search:'),
+              onChange: (event) => {
+                const value = event.target.value
+                const index = value.indexOf(':')
+                if (index < 0) return
+                selectSearch(value.slice(0, index), value.slice(index + 1))
+              },
+            }, searchGroups.map((group) => h('optgroup', {
+              key: group.id,
+              label: group.available ? group.label : `${group.label} · 不可用`,
+            }, (group.models || []).map((model) => h('option', {
+              key: `${group.id}:${model.id}`,
+              value: `${group.id}:${model.id}`,
+              disabled: group.available === false,
+            }, model.name)))))
+            : h('span', { style: styles.muted }, '暂无可用搜索模型')))
+        : null
 
       const tabs = tabsOf(data)
       const activeTab = tabs.some((entry) => entry.id === tab) ? tab : tabs[0].id
@@ -515,7 +591,277 @@ window.__ModuleLoader__.load({
           h('span', { style: notice.kind === 'err' ? styles.err : styles.ok }, notice.text)))
       }
 
-      return h('div', { style: styles.root }, header, proxyStrip, tabBar, panel, notes)
+      return h('div', { style: styles.root }, header, proxyStrip, searchStrip, tabBar, panel, notes)
+    }
+
+    // --- Triple model seat: 模型 / 推理等级 / 上下文 ---
+    const selectCss = {
+      root: { minWidth: 0, position: 'relative' },
+      trigger: {
+        minWidth: 0, maxWidth: 280, height: 28, color: 'var(--dsw-alias-label-secondary, #666)',
+        cursor: 'pointer', background: 'transparent', border: 'none', borderRadius: 24,
+        display: 'flex', alignItems: 'center', gap: 4, padding: '0 4px 0 8px',
+        fontSize: 13, fontWeight: 500, lineHeight: '20px',
+      },
+      triggerLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
+      triggerMeta: { color: 'var(--dsw-alias-label-caption, #999)', flex: 'none', fontSize: 12 },
+      menu: {
+        zIndex: 20, border: '1px solid var(--dsw-alias-border-inverted, rgba(0,0,0,.12))',
+        background: 'var(--dsw-specific-menu, #fff)', width: 'min(260px, calc(100vw - 32px))',
+        maxHeight: 'min(360px, calc(100vh - 96px))', boxShadow: 'var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,.12))',
+        color: 'var(--dsw-alias-label-primary, #151517)', borderRadius: 12, display: 'flex',
+        flexDirection: 'column', padding: 4, position: 'absolute', bottom: 'calc(100% + 8px)',
+        right: 0, overflow: 'hidden',
+      },
+      cell: {
+        width: '100%', height: 40, color: 'inherit', cursor: 'pointer', textAlign: 'left',
+        background: 'transparent', border: 'none', borderRadius: 10, display: 'flex',
+        alignItems: 'center', gap: 8, padding: '0 10px', fontSize: 14, lineHeight: '22px',
+      },
+      cellLabel: { flex: 'auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      cellValue: { flex: '0 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-tertiary, #888)' },
+      option: {
+        width: '100%', minHeight: 38, color: 'inherit', textAlign: 'left', cursor: 'pointer',
+        background: 'transparent', border: 'none', borderRadius: 10, display: 'flex',
+        alignItems: 'center', gap: 8, padding: '6px 8px',
+      },
+      optionCopy: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+      optionName: { fontSize: 14, fontWeight: 500, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      check: { flex: '0 0 18px', display: 'grid', placeItems: 'center' },
+      groups: { minHeight: 0, overflowY: 'auto' },
+      groupTitle: {
+        position: 'sticky', top: 0, zIndex: 1, background: 'var(--dsw-specific-menu, #fff)',
+        color: 'var(--dsw-alias-label-tertiary, #888)', padding: '5px 8px 3px', fontSize: 12, fontWeight: 500,
+      },
+      empty: { color: 'var(--dsw-alias-label-tertiary, #888)', padding: 10, fontSize: 13 },
+      back: {
+        width: '100%', height: 32, border: 'none', background: 'transparent', cursor: 'pointer',
+        textAlign: 'left', padding: '0 10px', color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: 12,
+      },
+    }
+
+    function parseEffortMeta(effort) {
+      const description = String(effort?.description || '')
+      const effortLabel = (description.match(/(?:^|\|)effort:([^|]+)/) || [])[1]
+      const contextLabel = (description.match(/(?:^|\|)context:([^|]+)/) || [])[1]
+      const ctx = Number((description.match(/(?:^|\|)ctx:(\d+)/) || [])[1])
+      return {
+        id: effort.id,
+        name: effort.name,
+        effortLabel,
+        contextLabel,
+        contextWindow: Number.isFinite(ctx) ? ctx : undefined,
+      }
+    }
+
+    function dimensionOptions(efforts) {
+      const parsed = (efforts || []).map(parseEffortMeta)
+      const effortMap = new Map()
+      const contextMap = new Map()
+      for (const row of parsed) {
+        if (row.effortLabel && !effortMap.has(row.effortLabel)) {
+          effortMap.set(row.effortLabel, { key: row.effortLabel, label: row.effortLabel })
+        }
+        if (row.contextLabel && !contextMap.has(row.contextLabel)) {
+          contextMap.set(row.contextLabel, { key: row.contextLabel, label: row.contextLabel })
+        }
+      }
+      return {
+        rows: parsed,
+        efforts: [...effortMap.values()],
+        contexts: [...contextMap.values()],
+      }
+    }
+
+    function matchCompound(rows, { effortLabel, contextLabel }) {
+      return rows.find((row) => (
+        (effortLabel == null || row.effortLabel === effortLabel)
+        && (contextLabel == null || row.contextLabel === contextLabel)
+      )) || rows.find((row) => effortLabel == null || row.effortLabel === effortLabel)
+        || rows[0]
+    }
+
+    function TripleModelSelect({ locked, available, directory, load, select, t }) {
+      const state = react.useSyncExternalStore((fn) => directory.subscribe(fn), () => directory.getSnapshot())
+      const [open, setOpen] = react.useState(false)
+      const [pane, setPane] = react.useState('root')
+      const rootRef = react.useRef(null)
+
+      const choices = react.useMemo(() => state.groups.flatMap((group) => group.models.map((model) => ({
+        group,
+        model,
+        selection: {
+          provider: group.id,
+          model: model.id,
+          ...(model.reasoning?.defaultEffort ? { reasoningEffort: model.reasoning.defaultEffort } : {}),
+        },
+      }))), [state.groups])
+
+      const currentChoice = choices.find((c) => (
+        c.selection.provider === state.current?.provider && c.selection.model === state.current?.model
+      ))
+      const dims = react.useMemo(
+        () => dimensionOptions(currentChoice?.model.reasoning?.efforts),
+        [currentChoice],
+      )
+      const effectiveEffort = state.current?.reasoningEffort ?? currentChoice?.model.reasoning?.defaultEffort
+      const currentRow = dims.rows.find((row) => row.id === effectiveEffort) || dims.rows[0]
+      const effortLabel = currentRow?.effortLabel
+      const contextLabel = currentRow?.contextLabel
+      const busy = state.status === 'selecting'
+
+      react.useEffect(() => {
+        if (available) load()
+      }, [available, load])
+
+      react.useEffect(() => {
+        if (!open) return undefined
+        const closeOutside = (event) => {
+          if (!rootRef.current?.contains(event.target)) {
+            setOpen(false)
+            setPane('root')
+          }
+        }
+        document.addEventListener('mousedown', closeOutside)
+        return () => document.removeEventListener('mousedown', closeOutside)
+      }, [open])
+
+      if (!available) return null
+
+      const close = () => {
+        setOpen(false)
+        setPane('root')
+      }
+
+      const chooseModel = (selection) => {
+        if (state.current?.provider === selection.provider && state.current.model === selection.model) {
+          close()
+          return
+        }
+        select(selection).then((ok) => { if (ok) close() })
+      }
+
+      const chooseCompound = (next) => {
+        if (!state.current) return
+        const hit = matchCompound(dims.rows, next)
+        if (!hit) return
+        if (hit.id === effectiveEffort) {
+          close()
+          return
+        }
+        select({
+          provider: state.current.provider,
+          model: state.current.model,
+          reasoningEffort: hit.id,
+        }).then((ok) => { if (ok) close() })
+      }
+
+      const modelLabel = currentChoice?.model.name ?? (t ? t('trigger.fallback') : '选择模型')
+      const metaBits = [effortLabel, contextLabel].filter(Boolean)
+      const triggerMeta = metaBits.join(' · ')
+
+      const cell = (label, value, onClick) => h('button', {
+        type: 'button',
+        style: selectCss.cell,
+        onClick,
+        onMouseEnter: (e) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.04))' },
+        onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
+      },
+        h('span', { style: selectCss.cellLabel }, label),
+        h('span', { style: selectCss.cellValue }, value || ''),
+        h('span', { style: selectCss.cellValue }, '›'))
+
+      const option = (key, label, selected, onClick) => h('button', {
+        key,
+        type: 'button',
+        style: selectCss.option,
+        disabled: busy,
+        onClick,
+        onMouseEnter: (e) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.04))' },
+        onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
+      },
+        h('span', { style: selectCss.optionCopy }, h('span', { style: selectCss.optionName }, label)),
+        h('span', { style: selectCss.check }, selected ? '✓' : ''))
+
+      const menuChildren = []
+      if (pane === 'root') {
+        menuChildren.push(cell('模型', modelLabel, () => setPane('model')))
+        if (dims.efforts.length > 0) {
+          menuChildren.push(cell(
+            '推理等级',
+            effortLabel || (t ? t('effort.providerDefault') : 'Default'),
+            () => setPane('effort'),
+          ))
+        }
+        // Always keep the third row when metadata provides a context label.
+        if (dims.contexts.length > 0 || contextLabel) {
+          menuChildren.push(cell('上下文', contextLabel || (dims.contexts[0]?.label ?? ''), () => setPane('context')))
+        }
+      } else if (pane === 'model') {
+        menuChildren.push(h('button', { type: 'button', style: selectCss.back, onClick: () => setPane('root') }, '‹ 返回'))
+        if (state.groups.length === 0) {
+          menuChildren.push(h('div', { style: selectCss.empty }, t ? t('empty.models') : '没有可用的模型。'))
+        } else {
+          menuChildren.push(h('div', { style: selectCss.groups }, state.groups.map((group) => (
+            h('section', { key: group.id },
+              h('div', { style: selectCss.groupTitle }, group.name),
+              group.models.map((model) => option(
+                model.id,
+                model.name,
+                state.current?.provider === group.id && state.current?.model === model.id,
+                () => chooseModel({ provider: group.id, model: model.id }),
+              )))
+          ))))
+        }
+      } else if (pane === 'effort') {
+        menuChildren.push(h('button', { type: 'button', style: selectCss.back, onClick: () => setPane('root') }, '‹ 返回'))
+        if (dims.efforts.length === 0) {
+          menuChildren.push(h('div', { style: selectCss.empty }, t ? t('empty.efforts') : '当前模型未提供推理等级。'))
+        } else {
+          for (const level of dims.efforts) {
+            menuChildren.push(option(
+              level.key,
+              level.label,
+              effortLabel === level.key,
+              () => chooseCompound({ effortLabel: level.key, contextLabel }),
+            ))
+          }
+        }
+      } else if (pane === 'context') {
+        menuChildren.push(h('button', { type: 'button', style: selectCss.back, onClick: () => setPane('root') }, '‹ 返回'))
+        if (dims.contexts.length === 0) {
+          menuChildren.push(h('div', { style: selectCss.empty }, '当前模型未提供上下文选项。'))
+        } else {
+          for (const level of dims.contexts) {
+            menuChildren.push(option(
+              level.key,
+              level.label,
+              contextLabel === level.key,
+              () => chooseCompound({ effortLabel, contextLabel: level.key }),
+            ))
+          }
+        }
+      }
+
+      return h('div', { ref: rootRef, style: selectCss.root },
+        h('button', {
+          type: 'button',
+          style: { ...selectCss.trigger, ...(locked ? { opacity: 0.5, cursor: 'default' } : {}) },
+          disabled: locked,
+          title: triggerMeta ? `${modelLabel} · ${triggerMeta}` : modelLabel,
+          onClick: () => {
+            if (open) close()
+            else {
+              setPane('root')
+              setOpen(true)
+              load()
+            }
+          },
+        },
+          h('span', { style: selectCss.triggerLabel }, modelLabel),
+          triggerMeta ? h('span', { style: selectCss.triggerMeta }, triggerMeta) : null,
+          h('span', { style: selectCss.triggerMeta }, open ? '▴' : '▾')),
+        open ? h('div', { style: selectCss.menu, role: 'menu' }, menuChildren) : null)
     }
 
     function apply(ctx) {
@@ -525,10 +871,36 @@ window.__ModuleLoader__.load({
         order: 30,
         label: () => '订阅',
       }, SubscriptionsSection))
+
+      // Shadow the stock 2-pane ModelSelect with a 3-pane seat (模型 / 推理等级 / 上下文).
+      ctx.inject(['modelDirectories', 'sessions'], (scope) => {
+        const models = scope.modelDirectories
+        const sessions = scope.sessions
+        scope.slots.inject('conversation.input.model', () => scope.slots.register({
+          name: 'conversation.input.model',
+          locale: 'model',
+          priority: -1,
+          registrant: 'dsh-cpa-plus',
+          inject: (sessionId) => {
+            const directory = models.directoryFor(sessionId)
+            const available = sessions.subagentAddress(sessionId) === undefined
+            return {
+              available,
+              directory: directory.store,
+              load: () => {
+                if (available) directory.load().catch(() => {})
+              },
+              select: (selection) => (available
+                ? directory.select(selection).then(() => true, () => false)
+                : Promise.resolve(false)),
+            }
+          },
+        }, TripleModelSelect))
+      })
     }
 
     exports.apply = apply
-    exports.inject = ['slots']
+    exports.inject = ['slots', 'modelDirectories', 'sessions']
     return module.exports
   },
 })

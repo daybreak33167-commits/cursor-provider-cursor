@@ -8,7 +8,7 @@ const CACHE_MS = 60_000
 const FAMILY = {
   auto: { contextWindow: DEFAULT_CONTEXT, optimize: ['cost', 'balanced', 'intelligence'] },
   composer: { contextWindow: DEFAULT_CONTEXT, fast: true },
-  grok: { contextWindow: DEFAULT_CONTEXT, efforts: ['low', 'medium', 'high'], fast: true },
+  grok: { contextWindow: DEFAULT_CONTEXT, maxContextWindow: MAX_CONTEXT, efforts: ['low', 'medium', 'high', 'xhigh'], fast: true, maxMode: true },
   claude: { contextWindow: DEFAULT_CONTEXT, maxContextWindow: MAX_CONTEXT, efforts: ['low', 'medium', 'high'], maxMode: true },
   gpt: { contextWindow: DEFAULT_CONTEXT, maxContextWindow: MAX_CONTEXT, efforts: ['low', 'medium', 'high', 'xhigh'], fast: true, maxMode: true },
   gemini: { contextWindow: MAX_CONTEXT, efforts: ['low', 'medium', 'high'] },
@@ -80,6 +80,9 @@ function familyOf(id) {
   return 'composer'
 }
 
+const SPEED_VALUES = new Set(['standard', 'fast', 'true', 'false', 'on', 'off', '0', '1', 'default', 'normal'])
+const REAL_EFFORT_VALUES = new Set(['low', 'medium', 'high', 'xhigh', 'extra_high', 'extra-high', 'minimal', 'min', 'max'])
+
 function classifyParam(id) {
   const name = String(id).toLowerCase()
   if (name === 'optimize_for' || name === 'optimization') return 'optimize'
@@ -87,6 +90,64 @@ function classifyParam(id) {
   if (name === 'max' || name === 'max_mode' || name === 'maxmode' || name === 'long_context') return 'max'
   if (name.includes('effort') || name === 'reasoning' || name === 'thinking') return 'effort'
   return 'other'
+}
+
+function paramValueList(parameter) {
+  return (parameter?.values ?? []).map((entry) => String(entry.value ?? entry).toLowerCase())
+}
+
+/** Cursor sometimes exposes a speed toggle (standard/fast) under thinking/effort. */
+function isSpeedOnlyParam(parameter) {
+  const values = paramValueList(parameter)
+  return values.length > 0 && values.every((value) => SPEED_VALUES.has(value))
+}
+
+function hasRealEffortValues(parameter) {
+  return paramValueList(parameter).some((value) => REAL_EFFORT_VALUES.has(value))
+}
+
+function asFastParam(parameter) {
+  return {
+    id: 'fast',
+    displayName: parameter?.displayName || 'Fast',
+    values: [
+      { value: 'false', displayName: 'Standard' },
+      { value: 'true', displayName: 'Fast' },
+    ],
+  }
+}
+
+/**
+ * Merge live Cursor parameters with family defaults.
+ * Speed toggles must not replace real thinking levels (low/medium/high/…).
+ */
+function normalizeLiveParameters(liveParameters, family) {
+  const inferred = inferParameters(family)
+  if (!liveParameters?.length) return inferred
+
+  const liveByKind = new Map()
+  for (const parameter of liveParameters) {
+    let kind = classifyParam(parameter.id)
+    let next = parameter
+    if (kind === 'effort' && isSpeedOnlyParam(parameter)) {
+      kind = 'fast'
+      next = asFastParam(parameter)
+    }
+    if (kind === 'other') continue
+    if (kind === 'effort' && !hasRealEffortValues(parameter)) continue
+    liveByKind.set(kind, next)
+  }
+
+  const merged = new Map()
+  for (const parameter of inferred) {
+    const kind = classifyParam(parameter.id)
+    if (kind !== 'other') merged.set(kind, parameter)
+  }
+  for (const [kind, parameter] of liveByKind) {
+    if (kind === 'effort' && !hasRealEffortValues(parameter)) continue
+    merged.set(kind, parameter)
+  }
+  return [...merged.values()]
 }
 
 function encodeParams(params) {
@@ -164,7 +225,7 @@ function normalizeLiveItem(item) {
     name: displayName(item.displayName ?? item.name, id),
     description: item.description,
     aliases: item.aliases ?? [],
-    parameters: item.parameters?.length ? item.parameters : inferParameters(family),
+    parameters: normalizeLiveParameters(item.parameters, family),
     variants: item.variants ?? [],
     family,
     contextWindow: spec.contextWindow ?? DEFAULT_CONTEXT,
@@ -252,6 +313,10 @@ function findRecord(catalog, modelId) {
   }
 }
 
+function recordParameters(record) {
+  return normalizeLiveParameters(record.parameters, record.family ?? familyOf(record.id))
+}
+
 function groupedParams(parameters) {
   const groups = { effort: undefined, fast: undefined, max: undefined, optimize: undefined }
   for (const parameter of parameters ?? []) {
@@ -261,56 +326,82 @@ function groupedParams(parameters) {
   return groups
 }
 
+/**
+ * Build selectable reasoningEffort rows.
+ * When both thinking-level and Max-context exist, emit the cartesian product so
+ * the UI can expose three independent pickers (model / effort / context) while
+ * DSH still validates a single opaque reasoningEffort id.
+ */
 function effortChoices(record) {
-  const groups = groupedParams(record.parameters)
+  const groups = groupedParams(recordParameters(record))
   const choices = []
+
+  const baseWindow = record.contextWindow ?? DEFAULT_CONTEXT
+  const maxWindow = record.maxContextWindow ?? baseWindow
+  const fixedContextName = `${Math.round(baseWindow / 1000)}K`
 
   if (groups.optimize) {
     for (const value of paramValues(groups.optimize)) {
+      const params = [{ id: groups.optimize.id, value: value.value }]
       choices.push({
-        id: encodeParams([{ id: groups.optimize.id, value: value.value }]),
-        name: value.name,
-        params: [{ id: groups.optimize.id, value: value.value }],
-        contextWindow: record.contextWindow,
+        id: encodeParams(params),
+        name: `${value.name} · ${fixedContextName}`,
+        params,
+        contextWindow: baseWindow,
+        effortLabel: value.name,
+        contextLabel: fixedContextName,
       })
     }
     return choices
   }
 
-  const efforts = groups.effort
+  const effortValues = groups.effort
     ? paramValues(groups.effort)
-    : [{ value: '', name: groups.fast || groups.max ? 'Default' : 'Default' }]
-  const maxes = groups.max
-    ? paramValues(groups.max)
-    : [{ value: '', name: '' }]
+    : groups.fast
+      ? paramValues(groups.fast).map((value) => ({
+        value: value.value,
+        name: value.value === 'true' || value.value === '1' ? 'Fast' : 'Standard',
+        fast: true,
+      }))
+      : [{ value: '', name: 'Default' }]
 
-  for (const effort of efforts) {
-    for (const max of maxes) {
+  // Always expose a context dimension so the third picker stays visible.
+  // With Max mode: 200K / Max 1000K; otherwise a single fixed window.
+  const contextValues = groups.max && maxWindow > baseWindow
+    ? paramValues(groups.max).map((value) => {
+      const maxOn = value.value === 'true' || value.value === '1' || /max|1m|long/i.test(`${value.value} ${value.name}`)
+      const window = maxOn ? maxWindow : baseWindow
+      return {
+        value: value.value,
+        name: maxOn ? `Max ${Math.round(window / 1000)}K` : `${Math.round(window / 1000)}K`,
+        window,
+      }
+    })
+    : [{ value: '', name: fixedContextName, window: baseWindow }]
+
+  for (const effort of effortValues) {
+    for (const context of contextValues) {
       const params = []
-      if (groups.effort && effort.value !== '') params.push({ id: groups.effort.id, value: effort.value })
-      if (groups.max && max.value !== '') params.push({ id: groups.max.id, value: max.value })
-      const maxOn = groups.max && (max.value === 'true' || max.value === '1' || /max|1m|long/i.test(`${max.value} ${max.name}`))
-      const windowK = Math.round((maxOn ? (record.maxContextWindow ?? MAX_CONTEXT) : record.contextWindow) / 1000)
+      if (groups.effort && effort.value !== '') {
+        params.push({ id: groups.effort.id, value: effort.value })
+      } else if (effort.fast && groups.fast) {
+        params.push({ id: groups.fast.id, value: effort.value })
+      }
+      if (groups.max && context.value !== '') {
+        params.push({ id: groups.max.id, value: context.value })
+      }
       const parts = []
-      if (groups.effort && effort.name && effort.name !== 'Default') parts.push(effort.name)
-      if (groups.max) parts.push(maxOn ? `Max ${windowK}K` : `${windowK}K`)
-      const name = parts.join(' · ') || effort.name || 'Default'
+      if (effort.name && effort.name !== 'Default') parts.push(effort.name)
+      if (context.name) parts.push(context.name)
       choices.push({
         id: encodeParams(params) || 'default',
-        name,
+        name: parts.join(' · ') || effort.name || 'Default',
         params,
-        contextWindow: maxOn ? (record.maxContextWindow ?? record.contextWindow) : record.contextWindow,
+        contextWindow: context.window,
+        effortLabel: effort.name || 'Default',
+        contextLabel: context.name,
       })
     }
-  }
-
-  if (groups.fast && !groups.effort && !groups.max) {
-    return paramValues(groups.fast).map((value) => ({
-      id: encodeParams([{ id: groups.fast.id, value: value.value }]),
-      name: value.value === 'true' || value.value === '1' ? 'Fast' : 'Standard',
-      params: [{ id: groups.fast.id, value: value.value }],
-      contextWindow: record.contextWindow,
-    }))
   }
 
   return choices
@@ -327,8 +418,10 @@ function defaultChoice(record, implied) {
     ))
     if (hit) return hit
   }
-  if (implied.length) {
-    const hit = choices.find((choice) => implied.every((param) => choice.params.some((item) => item.id === param.id && item.value === param.value)))
+  if (implied?.length) {
+    const hit = choices.find((choice) => (
+      implied.every((param) => choice.params.some((item) => item.id === param.id && item.value === param.value))
+    ))
     if (hit) return hit
   }
   const preferred = choices.find((choice) => {
@@ -339,7 +432,14 @@ function defaultChoice(record, implied) {
     const maxOff = !max || max.value === 'false' || max.value === '0'
     return effort?.value === 'medium' && maxOff
   })
-  return preferred ?? choices[0] ?? { id: 'default', name: 'Default', params: [], contextWindow: record.contextWindow }
+  return preferred ?? choices[0] ?? {
+    id: 'default',
+    name: 'Default',
+    params: [],
+    contextWindow: record.contextWindow ?? DEFAULT_CONTEXT,
+    effortLabel: undefined,
+    contextLabel: undefined,
+  }
 }
 
 export function listCatalogModels(provider, catalog, configured) {
@@ -392,26 +492,43 @@ export function resolveCatalogModel(provider, modelId, catalog, ReasoningEffortI
   }
   const { record, implied } = findRecord(catalog, lookupId)
   const choices = [...effortChoices(record)]
-  const effortImplied = implied.filter((param) => classifyParam(param.id) !== 'fast')
-  let fallback = defaultChoice(record, effortImplied.length ? effortImplied : variantParams)
-  if (!choices.some((choice) => choice.id === fallback.id)) {
-    fallback = choices[0] ?? fallback
+  const effortImplied = [
+    ...implied.filter((param) => classifyParam(param.id) !== 'fast'),
+    ...variantParams,
+  ]
+  let fallback = defaultChoice(record, effortImplied)
+  if (choices.length > 0 && !choices.some((choice) => choice.id === fallback.id)) {
+    fallback = choices[0]
   }
   if (choices.length === 0) {
-    fallback = { id: 'default', name: 'Default', params: [], contextWindow: record.contextWindow ?? DEFAULT_CONTEXT }
+    fallback = {
+      id: 'default',
+      name: 'Default',
+      params: [],
+      contextWindow: record.contextWindow ?? DEFAULT_CONTEXT,
+      effortLabel: undefined,
+      contextLabel: undefined,
+    }
     choices.push(fallback)
   }
-  const contextVaries = new Set(choices.map((choice) => choice.contextWindow)).size > 1
+
+  const hasContextDim = choices.some((choice) => choice.contextLabel)
+  const hasEffortDim = choices.some((choice) => choice.effortLabel)
   const efforts = choices.map((choice) => ({
     id: brand(choice.id),
     name: choice.name,
-    ...contextVaries
-      ? { description: `${Math.round((choice.contextWindow ?? record.contextWindow) / 1000)}K context` }
-      : {},
+    // Custom 3-pane UI reads these; stock UI shows name + description.
+    description: [
+      choice.effortLabel ? `effort:${choice.effortLabel}` : '',
+      choice.contextLabel ? `context:${choice.contextLabel}` : '',
+      `ctx:${choice.contextWindow}`,
+    ].filter(Boolean).join('|'),
   }))
+
   let name = record.name
   if (modelId.endsWith('-fast')) name = `${record.name} Fast`
   else if (modelId.endsWith('-thinking')) name = `${record.name} Thinking`
+
   return {
     provider,
     id: modelId,
@@ -429,6 +546,10 @@ export function resolveCatalogModel(provider, modelId, catalog, ReasoningEffortI
       id: record.id,
       params: fallback.params,
       choices,
+      dimensions: {
+        effort: hasEffortDim,
+        context: hasContextDim,
+      },
     },
   }
 }
@@ -453,6 +574,7 @@ export function toCursorSelection(modelId, reasoningEffort, resolved) {
     const extras = [
       ...implied.filter((param) => classifyParam(param.id) === 'fast'),
       ...modelId.endsWith('-fast') ? [{ id: 'fast', value: 'true' }] : [],
+      ...modelId.includes('::') ? decodeEffort(modelId.split('::')[1] ?? '') : [],
     ]
     for (const param of extras) {
       if (!next.some((item) => item.id === param.id)) next.push(param)

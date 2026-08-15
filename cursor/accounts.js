@@ -162,5 +162,9 @@ export function createAccountStore({ getCredentials, getApiKeyEnv, logger }) {
     warn(`account ${hit.email || '(unknown)'} hit an auth error; cooling down for ${AUTH_COOLDOWN_MS / 60_000} minutes`)
   }
 
-  return { list, add, remove, setDisabled, pick, reportAuthFailure }
+  function hasUsable() {
+    return (cache ?? []).some(usable)
+  }
+
+  return { list, add, remove, setDisabled, pick, reportAuthFailure, hasUsable }
 }

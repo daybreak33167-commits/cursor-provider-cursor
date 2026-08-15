@@ -1,14 +1,26 @@
 import { randomBytes } from 'node:crypto'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { importHost } from './host.js'
 import { applyCursor, CURSOR_PROVIDER, DEFAULT_CURSOR_API_KEY_ENV } from './cursor/index.js'
 import { registerSubscriptionCommands } from './commands.js'
-import { createProxySupervisor } from './cliproxy/runtime.js'
+import { createProxySupervisor, proxyHome } from './cliproxy/runtime.js'
 import { createManagementClient } from './cliproxy/management.js'
 import { createProxyCatalog } from './cliproxy/catalog.js'
 import { createProxyAdapterClass } from './cliproxy/adapter.js'
-import { createFactoryManager } from './cliproxy/factory.js'
+import { createFactoryAdapterClass } from './cliproxy/factory-adapter.js'
+import { createFactoryCatalog } from './cliproxy/factory-catalog.js'
+import { createFactoryManager, FACTORY_MODELS } from './cliproxy/factory.js'
+import { registerSubscriptionsWebSearch } from './cliproxy/web-search-router.js'
+import { loadCatalog, listCatalogModels } from './cursor/catalog.js'
 import { createSubscriptionsController, registerSubscriptionRoutes } from './cliproxy/routes.js'
-import { ALL_PROVIDER_IDS, FALLBACK_PROVIDER, PROXY_PROVIDERS } from './cliproxy/providers.js'
+import {
+  CPA_PROVIDER_IDS,
+  FALLBACK_PROVIDER,
+  FACTORY_PROVIDER_ID,
+  PROXY_PROVIDERS,
+  providerForChannel,
+} from './cliproxy/providers.js'
 
 export const name = 'subscriptions'
 export const inject = ['llm']
@@ -40,8 +52,8 @@ const cursorSection = Schema?.object?.({
 }).description('Cursor 订阅（@cursor/sdk）')
 
 const cliproxySection = Schema?.object?.({
-  mode: Schema.union(['managed', 'external']).default('managed')
-    .description('managed：插件自动下载并托管 CLIProxyAPI；external：连接已有实例'),
+  mode: Schema.union(['off', 'managed', 'external']).default('managed')
+    .description('managed：插件内置托管 CLIProxyAPI（默认）；external：连接已有实例；off：仅 Cursor + Factory 直连'),
   port: Schema.natural().default(8317).description('托管模式下 CLIProxyAPI 监听的本地端口'),
   externalUrl: Schema.string().description('external 模式的基础地址，例如 http://127.0.0.1:8317'),
   binaryPath: Schema.string().description('自备 CLIProxyAPI 可执行文件路径（跳过自动下载）'),
@@ -49,7 +61,7 @@ const cliproxySection = Schema?.object?.({
   managementKeyEnv: Schema.string().role('credential-ref').default(DEFAULT_MANAGEMENT_KEY_ENV),
   apiKeyEnv: Schema.string().role('credential-ref').default(DEFAULT_PROXY_API_KEY_ENV),
   retryPolicy: llm.RetryPolicySchema,
-}).description('CLIProxyAPI（Claude Code / Codex / Antigravity / Kimi / Grok 等订阅）')
+}).description('内置 CLIProxyAPI（Claude Code / Codex / Antigravity / Kimi / Grok 等）。默认托管启动。')
 
 export const Config = Schema?.object?.({
   cursor: cursorSection,
@@ -69,8 +81,9 @@ function cursorOptions(config) {
 
 function cliproxyOptions(config) {
   const section = config?.cliproxy ?? {}
+  const mode = section.mode === 'external' || section.mode === 'off' ? section.mode : 'managed'
   return {
-    mode: section.mode === 'external' ? 'external' : 'managed',
+    mode,
     port: section.port || 8317,
     externalUrl: section.externalUrl,
     binaryPath: section.binaryPath,
@@ -148,14 +161,29 @@ function makeSecretsResolver(ctx, getConf) {
 export function apply(ctx, config = {}) {
   let current = () => config
 
-  // --- Cursor (existing @cursor/sdk adapter) ---
+  const searchControl = {
+    preferred: () => 'grok',
+  }
   const cursor = applyCursor(ctx, {
     llm,
     options: () => cursorOptions(current()),
+    allowNativeSearch: () => searchControl.preferred() === 'cursor',
+  })
+  void cursor.accounts.list().catch(() => {})
+
+  const factoryCatalog = createFactoryCatalog()
+  const FactoryAdapter = createFactoryAdapterClass({
+    LlmAdapter: llm.LlmAdapter,
+    LlmError: llm.LlmError,
+    CallId: llm.CallId,
+    ReasoningEffortId: llm.ReasoningEffortId,
   })
 
-  // --- CLIProxyAPI managed proxy + OpenAI-compatible adapter ---
   const proxyConf = () => cliproxyOptions(current())
+  const cpaEnabled = () => {
+    const mode = proxyConf().mode
+    return mode === 'managed' || mode === 'external'
+  }
   const getSecrets = makeSecretsResolver(ctx, proxyConf)
   const supervisor = createProxySupervisor({
     logger: ctx.logger,
@@ -166,7 +194,7 @@ export function apply(ctx, config = {}) {
     getBaseUrl: supervisor.baseUrl,
     getKey: async () => (await getSecrets()).managementKey,
   })
-  const catalog = createProxyCatalog({
+  const proxyCatalog = createProxyCatalog({
     getBaseUrl: supervisor.baseUrl,
     getApiKey: async () => (await getSecrets()).apiKey,
     logger: ctx.logger,
@@ -178,18 +206,43 @@ export function apply(ctx, config = {}) {
     ReasoningEffortId: llm.ReasoningEffortId,
   })
   const proxyAdapter = new ProxyAdapter({
-    catalog,
+    catalog: proxyCatalog,
     getBaseUrl: supervisor.baseUrl,
     getApiKey: async () => (await getSecrets()).apiKey,
     retryPolicy: () => proxyConf().retryPolicy,
     resolveAttachments: () => ctx.get?.('attachments'),
     describeLoginHint: () => '。打开 设置 → 订阅（或 /subscriptions）检查代理状态',
   })
-  ctx.llm.registerAdapter(ALL_PROVIDER_IDS, proxyAdapter)
+
+  const factory = createFactoryManager({
+    getCredentials: () => ctx.get?.('credentials'),
+    mgmt,
+    proxyStatus: () => supervisor.status(),
+    onChanged: () => {
+      factoryCatalog.invalidate()
+      proxyCatalog.invalidate()
+    },
+    logger: ctx.logger,
+  })
+
+  const factoryAdapter = new FactoryAdapter({
+    catalog: factoryCatalog,
+    resolveAccount: () => factory.resolveAccount(),
+    requestHeaders: (account, apiProvider) => factory.requestHeaders(account, apiProvider),
+    retryPolicy: () => proxyConf().retryPolicy,
+    resolveAttachments: () => ctx.get?.('attachments'),
+    describeLoginHint: () => '。打开 设置 → 订阅 添加 Factory API Key 或导入 droid CLI',
+  })
+  ctx.llm.registerAdapter([FACTORY_PROVIDER_ID], factoryAdapter)
+
+  if (cpaEnabled()) {
+    ctx.llm.registerAdapter(CPA_PROVIDER_IDS, proxyAdapter)
+  }
 
   ctx.llm.registerConfigurableProviders?.([
     { provider: CURSOR_PROVIDER, displayName: 'Cursor', settingsNs: NS, settingsPath: ['cursor'] },
-    ...[...PROXY_PROVIDERS, FALLBACK_PROVIDER].map((provider) => ({
+    { provider: FACTORY_PROVIDER_ID, displayName: 'Factory Droid', settingsNs: NS, settingsPath: ['cliproxy'] },
+    ...[...PROXY_PROVIDERS.filter((p) => p.id !== FACTORY_PROVIDER_ID), FALLBACK_PROVIDER].map((provider) => ({
       provider: provider.id,
       displayName: provider.label,
       settingsNs: NS,
@@ -197,63 +250,173 @@ export function apply(ctx, config = {}) {
     })),
   ])
 
-  // Factory Droid: token manager that mirrors accounts into CLIProxyAPI as
-  // custom claude/codex/openai-compat upstreams (factory-* model aliases).
-  const factory = createFactoryManager({
-    getCredentials: () => ctx.get?.('credentials'),
-    mgmt,
-    proxyStatus: () => supervisor.status(),
-    onChanged: () => catalog.invalidate(),
-    logger: ctx.logger,
-  })
-
   const subscriptions = createSubscriptionsController({
     supervisor,
     mgmt,
-    catalog,
+    catalog: {
+      overview: async () => {
+        const factoryOverview = await factoryCatalog.overview()
+        if (!cpaEnabled()) return factoryOverview
+        const proxyOverview = await proxyCatalog.overview().catch(() => ({ providers: [], error: undefined }))
+        const byId = new Map()
+        for (const entry of [...factoryOverview.providers, ...(proxyOverview.providers ?? [])]) {
+          byId.set(entry.id, entry)
+        }
+        return {
+          at: Date.now(),
+          error: proxyOverview.error,
+          providers: [...byId.values()],
+        }
+      },
+      invalidate: () => {
+        factoryCatalog.invalidate()
+        proxyCatalog.invalidate()
+      },
+    },
     cursorOauth: cursor.oauth,
     factory,
+    webSearch: () => webSearch,
     logger: ctx.logger,
   })
+  const webSearch = registerSubscriptionsWebSearch(ctx, {
+    preferencePath: join(proxyHome(), 'web-search.json'),
+    defaultPreferred: 'grok',
+    peerIds: ['deepseek-official'],
+    listSearchModels: async () => {
+      const groups = []
+      try {
+        if (cpaEnabled()) {
+          const overview = await proxyCatalog.overview().catch(() => ({ providers: [] }))
+          const grok = overview.providers?.find((entry) => entry.id === 'grok-build')
+          const ids = grok?.models ?? []
+          if (ids.length > 0) {
+            groups.push({
+              id: 'grok',
+              label: 'Grok Build',
+              available: true,
+              models: ids.map((id) => ({ id, name: id })),
+            })
+          }
+        }
+      } catch { /* skip */ }
+      try {
+        if (cursor.accounts.hasUsable()) {
+          const picked = await cursor.accounts.pick({ advance: false })
+          const catalog = await loadCatalog(picked?.apiKey)
+          const models = listCatalogModels('cursor', catalog)
+          if (models.length > 0) {
+            groups.push({
+              id: 'cursor',
+              label: 'Cursor',
+              available: true,
+              models: models.map((model) => ({ id: model.id, name: model.name })),
+            })
+          }
+        }
+      } catch { /* skip */ }
+      if (factory.hasActiveBearer()) {
+        groups.push({
+          id: 'factory',
+          label: 'Factory',
+          available: true,
+          models: [
+            ...FACTORY_MODELS.xai.map((model) => ({
+              id: model.name,
+              name: model.display,
+            })),
+            ...FACTORY_MODELS.anthropic.map((model) => ({
+              id: model.name,
+              name: model.display,
+            })),
+          ],
+        })
+      }
+      return groups
+    },
+    factory: {
+      resolveApiKey: () => factory.resolveBearer(),
+      hasCredential: () => factory.hasActiveBearer(),
+    },
+    cursor: {
+      hasCredential: () => cursor.accounts.hasUsable() === true,
+      resolveApiKey: async () => {
+        const picked = await cursor.accounts.pick({ advance: false })
+        return picked?.apiKey
+      },
+    },
+    grok: {
+      getBaseUrl: () => supervisor.baseUrl(),
+      resolveApiKey: async () => (await getSecrets()).apiKey,
+      hasCredential: () => {
+        if (!cpaEnabled()) return false
+        const phase = supervisor.status()?.phase
+        if (phase !== 'running' && phase !== 'external-ok') return false
+        // Cheap sync probe: any non-disabled xai/grok auth file under auth-dir.
+        try {
+          const authDir = supervisor.paths?.auth
+          if (!authDir) return false
+          for (const name of readdirSync(authDir)) {
+            if (!name.endsWith('.json')) continue
+            try {
+              const raw = JSON.parse(readFileSync(join(authDir, name), 'utf8'))
+              const channel = String(raw?.type || raw?.provider || raw?.channel || '').toLowerCase()
+              if (raw?.disabled === true) continue
+              if (providerForChannel(channel) === 'grok-build' || /xai|grok/.test(channel)) return true
+            } catch { /* skip */ }
+          }
+        } catch { /* skip */ }
+        return false
+      },
+      listModels: async () => {
+        const overview = await proxyCatalog.overview().catch(() => ({ providers: [] }))
+        const grok = overview.providers?.find((entry) => entry.id === 'grok-build')
+        return grok?.models ?? []
+      },
+    },
+    logger: ctx.logger,
+  })
+  searchControl.preferred = webSearch.getPreferred
   ctx.inject(['webServer'], (webCtx) => {
-    registerSubscriptionRoutes(webCtx, subscriptions, { supervisor, mgmt, catalog })
+    registerSubscriptionRoutes(webCtx, subscriptions, {
+      supervisor,
+      mgmt,
+      catalog: proxyCatalog,
+    })
   })
 
   ctx.inject(['commands'], (cmdCtx) => {
     registerSubscriptionCommands(cmdCtx, { cursorOauth: cursor.oauth, subscriptions })
   })
 
-  // Start only once the credentials service is up so stored keys are reused
-  // and a proxy left over from the previous session can be adopted instead of
-  // killed over a key mismatch. Timer is a fallback for credential-less profiles.
-  let proxyStarted = false
-  const startProxy = () => {
-    if (proxyStarted) return
-    proxyStarted = true
-    void supervisor.start()
+  let started = false
+  const startServices = () => {
+    if (started) return
+    started = true
     factory.start()
+    if (cpaEnabled()) void supervisor.start()
+    else ctx.logger?.info?.('CLIProxyAPI disabled (cliproxy.mode=off); Factory + Cursor run direct')
   }
   try {
-    ctx.inject(['credentials'], () => startProxy())
+    ctx.inject(['credentials'], () => startServices())
   } catch {
-    startProxy()
+    startServices()
   }
-  const startFallback = setTimeout(startProxy, 15_000)
+  const startFallback = setTimeout(startServices, 15_000)
   if (typeof startFallback.unref === 'function') startFallback.unref()
 
-  const stopProxy = () => {
+  const stopServices = () => {
     clearTimeout(startFallback)
     factory.stop()
     void supervisor.stop()
   }
   if (typeof ctx.effect === 'function') {
     try {
-      ctx.effect(() => stopProxy, 'subscriptions: stop managed cliproxy')
+      ctx.effect(() => stopServices, 'subscriptions: stop factory/cliproxy')
     } catch {
-      ctx.on?.('dispose', stopProxy)
+      ctx.on?.('dispose', stopServices)
     }
   } else {
-    ctx.on?.('dispose', stopProxy)
+    ctx.on?.('dispose', stopServices)
   }
 
   importHost('@deepseek-ai/dsh-settings').then((settings) => {

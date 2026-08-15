@@ -1,34 +1,35 @@
-# dsh-subscriptions
+# dsh-cpa-plus
 
-DeepSeek Harness (DSH) 统一「订阅」插件：不用 API Key，通过 OAuth 复用你手上的 AI 编码订阅。
+DeepSeek Harness (DSH) 统一「订阅」插件：把 Cursor、Factory Droid 和 **内置托管的 CLIProxyAPI**
+整合成一套，复用手上的 AI 编码订阅。
 
 - **Cursor**：内置 `@cursor/sdk` 适配器（Composer / GPT / Claude / Gemini / Grok / Kimi 等 Cursor 云端模型）。
-- **CLIProxyAPI**：插件自动下载并托管 [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，
-  把 Claude Code、OpenAI Codex、Antigravity、Kimi Code、Grok Build 等订阅统一成本地 OpenAI 兼容端点。
-- **Factory Droid**：复用 [factory.ai](https://factory.ai) droid 订阅——插件管理其 WorkOS token
-  （可一键导入 droid CLI 登录），并作为自定义上游注入 CLIProxyAPI，模型以 `factory-*` 别名单独分组。
+- **Factory Droid**：管理 WorkOS / API Key；聊天直连 `api.factory.ai`（避免 CPA cloak 问题），
+  并把 Anthropic 原生 `web_search` 接到 DSH 的 LSearch。模型以 `factory-*` 别名单独分组。
+- **CLIProxyAPI（插件内置，默认托管）**：插件自动下载并启动本地 CPA，用于 Claude Code、Codex、
+  Antigravity、Kimi Code、Grok Build 等订阅；不需要你另开一个外部代理进程。
 
 所有模型都会出现在 DSH 的模型选择器里；登录管理集中在 **设置 → 订阅** 面板（或独立页面 `/subscriptions`）。
 
 ## 安装
 
 ```bash
-git clone https://github.com/daybreak33167-commits/dsh-subscriptions.git
-dsh plugin --profile web add link:/绝对路径/dsh-subscriptions
+git clone https://github.com/daybreak33167-commits/dsh-cpa-plus.git
+dsh plugin --profile web add link:/绝对路径/dsh-cpa-plus
 ```
 
 然后在 profile 的 `package.json`（`~/.dsh/profiles/web/package.json`）的 `dsh.profile.bundles`
-里加入 `"dsh-subscriptions"`，重启 `dsh web` 即可。
+里加入 `"dsh-cpa-plus"`，重启 `dsh web` 即可。
 
-首次启动时插件会：
+首次启动（`cliproxy.mode: managed`）时插件会：
 
-1. 从 GitHub Releases 下载对应平台的 CLIProxyAPI 二进制到 `~/.dsh/cliproxy/bin/`；
+1. 从 GitHub Releases 下载 CLIProxyAPI 到 `~/.dsh/cliproxy/bin/`；
 2. 生成 `~/.dsh/cliproxy/config.yaml`（只监听 `127.0.0.1`）；
-3. 随机生成管理密钥和代理 API Key 写入 DSH 凭据（`CLIPROXY_MANAGEMENT_KEY` / `CLIPROXY_API_KEY`）；
-4. 启动代理并做健康检查，进程崩溃自动退避重启，DSH 退出时同步停止。
+3. 把管理密钥 / 代理 API Key 写入 DSH 凭据；
+4. 启动代理并做健康检查，随 DSH 退出一并停止。
 
-> Windows 上若默认端口 8317 落在系统保留端口段（Hyper-V/WinNAT），插件会自动改用可用端口，
-> 无需手工处理；实际端口见 设置 → 订阅 面板。
+若暂时不需要 Claude Code / Codex 等 CPA 渠道，可在配置里设 `cliproxy.mode: off`
+（Cursor + Factory 仍可用）。
 
 ## 登录
 
@@ -63,7 +64,7 @@ Factory Droid 没有公开的浏览器 OAuth，三种添加方式：
 | `antigravity` | Antigravity | CLIProxyAPI 内置 |
 | `kimi-code` | Kimi Code | CLIProxyAPI 内置（设备码） |
 | `grok-build` | Grok Build | CLIProxyAPI 内置（设备码） |
-| `factory` | Factory Droid（factory.ai） | 插件管理 WorkOS token，注入 CLIProxyAPI 自定义上游 |
+| `factory` | Factory Droid（factory.ai） | 插件管理账号；聊天直连 Factory，搜索走 Factory Anthropic |
 | `gemini-cli` / `qwen-code` / `iflow` | Gemini CLI / Qwen / iFlow | 需要先在 CLIProxyAPI 插件商店安装对应插件（v7 起这些渠道走 CPA 插件） |
 | `cliproxy` | 其它（openai-compatibility 透传、CPA 插件渠道等） | — |
 
@@ -72,9 +73,8 @@ Factory Droid 没有公开的浏览器 OAuth，三种添加方式：
 未识别的进 `cliproxy`。登录成功后约 1 分钟内模型列表自动刷新。
 
 Factory Droid 的模型走 `factory-` 前缀别名（如 `factory-claude-opus-4-6`、`factory-gpt-5.3-codex`、
-`factory-glm-5`），与真正的 Claude Code / Codex 账号互不混淆：Claude 系走 Factory 的
-Anthropic 端点、GPT 系走 Responses 端点、GLM/Kimi 走 chat-completions 端点，
-多个 Factory 账号之间由 CLIProxyAPI 轮询负载均衡。
+`factory-kimi-k3`），与真正的 Claude Code / Codex 账号互不混淆：Claude 系走 Factory Anthropic
+Messages、GPT 系走 Responses、Core（Kimi/GLM 等）走 chat-completions；账号由插件本地管理。
 
 ## 配置（设置 → 插件 → subscriptions）
 

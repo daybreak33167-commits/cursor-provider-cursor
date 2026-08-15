@@ -30,7 +30,7 @@ async function resolveApiKey(ctx, connection, assertUsableApiKey) {
   return undefined
 }
 
-export function applyCursor(ctx, { llm, options }) {
+export function applyCursor(ctx, { llm, options, allowNativeSearch }) {
   const { LlmAdapter, LlmError, CallId, ReasoningEffortId, assertUsableApiKey } = llm
   const CursorAdapter = createCursorAdapterClass({ LlmAdapter, LlmError, CallId, ReasoningEffortId })
 
@@ -51,6 +51,7 @@ export function applyCursor(ctx, { llm, options }) {
     },
     reportAuthFailure: (apiKey) => accounts.reportAuthFailure(apiKey),
     resolveAttachments: () => ctx.get?.('attachments'),
+    allowNativeSearch: () => allowNativeSearch?.() === true,
   })
   ctx.llm.registerAdapter([CURSOR_PROVIDER], adapter)
 
