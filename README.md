@@ -4,8 +4,9 @@ DeepSeek Harness (DSH) 统一「订阅」插件：把 Cursor、Factory Droid 和
 整合成一套，复用手上的 AI 编码订阅。
 
 - **Cursor**：内置 `@cursor/sdk` 适配器（Composer / GPT / Claude / Gemini / Grok / Kimi 等 Cursor 云端模型）。
-- **Factory Droid**：管理 WorkOS / API Key；聊天直连 `api.factory.ai`（避免 CPA cloak 问题），
-  并把 Anthropic 原生 `web_search` 接到 DSH 的 LSearch。模型以 `factory-*` 别名单独分组。
+- **Factory Droid**：管理 WorkOS / API Key；聊天直连 `api.factory.ai`（避免 CPA cloak 问题）。
+  Factory Claude / Grok 以及 Cursor 对话由主模型在本轮直接调用原生 `web_search`；
+  其它模型仍把 DSH `web_search` 回退到设置里选的搜索模型。模型以 `factory-*` 别名单独分组。
 - **CLIProxyAPI（插件内置，默认托管）**：插件自动下载并启动本地 CPA，用于 Claude Code、Codex、
   Antigravity、Kimi Code、Grok Build 等订阅；不需要你另开一个外部代理进程。
 
@@ -64,7 +65,7 @@ Factory Droid 没有公开的浏览器 OAuth，三种添加方式：
 | `antigravity` | Antigravity | CLIProxyAPI 内置 |
 | `kimi-code` | Kimi Code | CLIProxyAPI 内置（设备码） |
 | `grok-build` | Grok Build | CLIProxyAPI 内置（设备码） |
-| `factory` | Factory Droid（factory.ai） | 插件管理账号；聊天直连 Factory，搜索走 Factory Anthropic |
+| `factory` | Factory Droid（factory.ai） | 插件管理账号；聊天直连 Factory，Claude/Grok 主模型本轮原生搜索 |
 | `gemini-cli` / `qwen-code` / `iflow` | Gemini CLI / Qwen / iFlow | 需要先在 CLIProxyAPI 插件商店安装对应插件（v7 起这些渠道走 CPA 插件） |
 | `cliproxy` | 其它（openai-compatibility 透传、CPA 插件渠道等） | — |
 

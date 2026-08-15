@@ -442,6 +442,13 @@ function defaultChoice(record, implied) {
   }
 }
 
+/** Canonical live ids the Cursor SDK will accept in Agent.create({ model }). */
+export function listCanonicalCursorModels(catalog) {
+  const live = (catalog ?? []).filter((item) => item.live)
+  const source = live.length > 0 ? live : (catalog ?? [])
+  return source.map((model) => ({ id: model.id, name: model.name }))
+}
+
 export function listCatalogModels(provider, catalog, configured) {
   const source = configured?.length
     ? configured.map((entry) => {

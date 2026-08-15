@@ -38,11 +38,11 @@ const BACKEND_META = {
   },
   [CURSOR_SEARCH_PROVIDER_ID]: {
     label: 'Cursor',
-    hint: '需登录 Cursor；对话走 Cursor 模型时同时开放原生 webSearch',
+    hint: '需登录 Cursor；对话走 Cursor 模型时由主模型直接调用原生 webSearch',
   },
   [FACTORY_SEARCH_PROVIDER_ID]: {
     label: 'Factory',
-    hint: '需添加 Factory 账号（Anthropic 原生 web_search）',
+    hint: '需添加 Factory 账号；对话走 Factory Claude/Grok 时由主模型直接调用原生 web_search',
   },
   'deepseek-official': {
     label: 'DeepSeek',
@@ -90,6 +90,16 @@ function parseSelection(provider, model) {
     }
   }
   return { provider: rawProvider, model: rawModel }
+}
+
+function canonicalizeListedModel(modelId, models) {
+  const ids = new Set((models ?? []).map((item) => item.id))
+  const raw = String(modelId || '').trim()
+  if (!raw) return ''
+  if (ids.has(raw)) return raw
+  const stripped = raw.replace(/-fast$/, '').replace(/-thinking$/, '')
+  if (stripped && ids.has(stripped)) return stripped
+  return ''
 }
 
 function defaultModelFor(provider, groups) {
@@ -222,6 +232,15 @@ export function registerSubscriptionsWebSearch(ctx, deps) {
       })
     }
     modelsCache = { at: Date.now(), groups }
+    const group = groups.find((entry) => entry.id === preference.provider)
+    if (group && preference.model) {
+      const canonical = canonicalizeListedModel(preference.model, group.models)
+        || defaultModelFor(preference.provider, groups)
+      if (canonical && canonical !== preference.model) {
+        preference = { provider: preference.provider, model: canonical }
+        writePreference(preferencePath, preference)
+      }
+    }
     return groups
   }
 

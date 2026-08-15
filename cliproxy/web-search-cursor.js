@@ -10,12 +10,29 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Agent } from '@cursor/sdk'
+import { loadCatalog, toCursorSelection } from '../cursor/catalog.js'
 
 export const CURSOR_SEARCH_PROVIDER_ID = 'cursor'
 export const CURSOR_SEARCH_DEFAULT_MODEL = 'composer-2.5'
 
 const SCRATCH = join(tmpdir(), 'dsh-cpa-plus-scratch')
 mkdirSync(SCRATCH, { recursive: true })
+
+function parseAvailableModels(message) {
+  const match = String(message).match(/Available models:\s*(.+?)(?:\. Use |\.?$)/s)
+  if (!match) return []
+  return match[1].split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function pickFallbackModel(available, preferred) {
+  const ids = available.filter((id) => id && id !== 'auto-smart' && id !== 'default')
+  if (preferred && available.includes(preferred)) return preferred
+  return ids.find((id) => id === CURSOR_SEARCH_DEFAULT_MODEL)
+    ?? ids.find((id) => id === 'grok-4.6')
+    ?? ids.find((id) => id === 'grok-4.5')
+    ?? ids[0]
+    ?? CURSOR_SEARCH_DEFAULT_MODEL
+}
 
 function searchPrompt(query) {
   return [
@@ -127,9 +144,11 @@ export function createCursorSearchProvider({ WebError, resolveOptions }) {
         )
       }
 
-      const model = options.model || CURSOR_SEARCH_DEFAULT_MODEL
+      await loadCatalog(apiKey).catch(() => [])
+      const requested = options.model || CURSOR_SEARCH_DEFAULT_MODEL
+      let model = toCursorSelection(requested)
       const createOptions = {
-        model: { id: model },
+        model,
         apiKey,
         tools: ['webSearch', 'webFetch'],
         local: {
@@ -143,11 +162,27 @@ export function createCursorSearchProvider({ WebError, resolveOptions }) {
         agent = await Agent.create(createOptions)
       } catch (error) {
         if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error)
-        throw new WebError(
-          `Cursor search agent failed to start: ${error instanceof Error ? error.message : error}`,
-          'WEB_PROVIDER_ERROR',
-          { cause: error },
-        )
+        const available = parseAvailableModels(error instanceof Error ? error.message : error)
+        const fallbackId = pickFallbackModel(available, model.id)
+        if (!available.length || (fallbackId === model.id && !model.params?.length)) {
+          throw new WebError(
+            `Cursor search agent failed to start: ${error instanceof Error ? error.message : error}`,
+            'WEB_PROVIDER_ERROR',
+            { cause: error },
+          )
+        }
+        model = { id: fallbackId }
+        createOptions.model = model
+        try {
+          agent = await Agent.create(createOptions)
+        } catch (retryError) {
+          if (signal?.aborted === true || isAbortError(retryError)) throw searchAborted(signal, retryError)
+          throw new WebError(
+            `Cursor search agent failed to start: ${retryError instanceof Error ? retryError.message : retryError}`,
+            'WEB_PROVIDER_ERROR',
+            { cause: retryError },
+          )
+        }
       }
 
       const bag = { texts: [], urls: [] }

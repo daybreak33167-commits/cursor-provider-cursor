@@ -71,16 +71,12 @@ function isThinkingEvent(event) {
 const META_TOOL_NAMES = new Set(['mcp', 'getmcptools', 'callmcptool'])
 const WORKSPACE_DENY = ['shell', 'task', 'read', 'edit', 'write', 'delete', 'grep', 'glob']
 
-function agentToolOptions(allowNativeSearch) {
-  if (allowNativeSearch) {
-    return {
-      tools: ['mcp', 'webSearch', 'webFetch'],
-      disallowedTools: WORKSPACE_DENY,
-    }
-  }
+const DSH_WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch', 'webSearch', 'webFetch'])
+
+function agentToolOptions() {
   return {
-    tools: ['mcp'],
-    disallowedTools: [...WORKSPACE_DENY, 'webSearch', 'webFetch'],
+    tools: ['mcp', 'webSearch', 'webFetch'],
+    disallowedTools: WORKSPACE_DENY,
   }
 }
 
@@ -93,7 +89,7 @@ function toolCallsFromEvent(event) {
   if (!message) return []
   const calls = []
   if (message.type === 'tool_call' && message.status !== 'completed' && message.status !== 'error'
-    && message.name && !isMetaToolName(message.name)) {
+    && message.name && !isMetaToolName(message.name) && !DSH_WEB_TOOL_NAMES.has(String(message.name))) {
     calls.push({
       id: String(message.call_id ?? message.id ?? `call_${crypto.randomUUID()}`),
       name: message.name,
@@ -104,7 +100,7 @@ function toolCallsFromEvent(event) {
   if (!Array.isArray(content)) return calls
   for (const block of content) {
     if (block?.type !== 'tool_use' && block?.type !== 'tool-call') continue
-    if (isMetaToolName(block.name)) continue
+    if (isMetaToolName(block.name) || DSH_WEB_TOOL_NAMES.has(String(block.name ?? ''))) continue
     calls.push({
       id: String(block.id ?? `call_${crypto.randomUUID()}`),
       name: block.name,
@@ -151,8 +147,6 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
-    this.allowNativeSearch = options.allowNativeSearch
-    this.agentNativeSearch = undefined
   }
 
   wake() {
@@ -180,6 +174,9 @@ export class CursorSession {
     const table = {}
     const aliases = new Map()
     for (const tool of tools ?? []) {
+      if (DSH_WEB_TOOL_NAMES.has(String(tool.name ?? '')) || DSH_WEB_TOOL_NAMES.has(sanitizeToolName(tool.name))) {
+        continue
+      }
       const name = sanitizeToolName(tool.name)
       aliases.set(name, tool.name)
       table[name] = {
@@ -205,22 +202,9 @@ export class CursorSession {
     return table
   }
 
-  nativeSearchEnabled() {
-    return this.allowNativeSearch?.() === true
-  }
-
   async ensureAgent(tools) {
-    const wantSearch = this.nativeSearchEnabled()
-    if (this.agent && this.agentNativeSearch === wantSearch) return this.agent
-    if (this.agent?.[Symbol.asyncDispose]) {
-      try {
-        await this.agent[Symbol.asyncDispose]()
-      } catch {
-        // Recreate below.
-      }
-      this.agent = undefined
-    }
-    const toolOpts = agentToolOptions(wantSearch)
+    if (this.agent) return this.agent
+    const toolOpts = agentToolOptions()
     const createOptions = {
       model: this.modelSelection,
       tools: toolOpts.tools,
@@ -237,13 +221,10 @@ export class CursorSession {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (!/tool|disallowed|unknown/i.test(message)) throw error
-      createOptions.tools = wantSearch ? ['mcp'] : undefined
-      createOptions.disallowedTools = wantSearch
-        ? WORKSPACE_DENY
-        : [...WORKSPACE_DENY, 'webSearch', 'webFetch']
+      createOptions.tools = ['mcp']
+      createOptions.disallowedTools = [...WORKSPACE_DENY, 'webSearch', 'webFetch']
       this.agent = await Agent.create(createOptions)
     }
-    this.agentNativeSearch = wantSearch
     return this.agent
   }
 
@@ -292,7 +273,7 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
-    const toolOpts = agentToolOptions(this.nativeSearchEnabled())
+    const toolOpts = agentToolOptions()
     this.run = await agent.send(images?.length ? { text: prompt, images } : prompt, {
       model: this.modelSelection,
       tools: toolOpts.tools,
@@ -511,7 +492,6 @@ export function getSession(key, init) {
     existing.apiKey = init.apiKey
     existing.model = init.model
     existing.modelSelection = init.modelSelection ?? existing.modelSelection
-    existing.allowNativeSearch = init.allowNativeSearch ?? existing.allowNativeSearch
     return existing
   }
   const created = new CursorSession(init)

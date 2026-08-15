@@ -16,6 +16,15 @@ import {
   factoryUpstreamModelId,
 } from './factory.js'
 
+function isDshWebSearchTool(name) {
+  const value = String(name ?? '')
+  return value === 'web_search' || value === 'webSearch'
+}
+
+function withoutDshWebSearch(tools) {
+  return (tools ?? []).filter((tool) => !isDshWebSearchTool(tool.name))
+}
+
 function dataUrl(image) {
   return `data:${image.mimeType || 'image/png'};base64,${image.data}`
 }
@@ -423,6 +432,9 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
         readImage,
         toolNameOf: (name) => sanitizeToolName(name),
       })
+      // Responses streaming does not yet round-trip DSH function tools.
+      // Factory Grok can still search in-request via the native server tool.
+      const tools = apiProvider === 'xai' ? [{ type: 'web_search' }] : undefined
       const body = {
         model: factoryUpstreamModelId(options.model),
         instructions: DROID_SYSTEM_PREFIX + (options.system ?? ''),
@@ -430,6 +442,7 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
         stream: true,
         store: false,
       }
+      if (tools) body.tools = tools
       if (options.maxTokens) body.max_output_tokens = Math.max(16, options.maxTokens)
       if (options.reasoningEffort) {
         const effort = proxyEffortValue(options.reasoningEffort)
@@ -515,15 +528,19 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
         toolNameOf,
         aliases,
       })
-      const tools = toAnthropicTools(options.tools, aliases)
+      const clientTools = toAnthropicTools(withoutDshWebSearch(options.tools), aliases) ?? []
+      const tools = [
+        { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
+        ...clientTools,
+      ]
       const body = {
         model: factoryUpstreamModelId(options.model),
         max_tokens: Math.max(16, options.maxTokens || 32_768),
         system,
         messages,
         stream: true,
+        tools,
       }
-      if (tools) body.tools = tools
       if (options.reasoningEffort) {
         const effort = proxyEffortValue(options.reasoningEffort)
         if (effort === 'off') {
@@ -574,7 +591,7 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
             } else if (block?.type === 'thinking') {
               thinkingBlock = { index, text: '' }
               yield { type: 'block-start', index, blockType: 'reasoning' }
-            } else if (block?.type === 'tool_use') {
+            } else if (block?.type === 'tool_use' && !isDshWebSearchTool(block.name)) {
               toolBlocks.set(index, {
                 index,
                 id: String(block.id ?? `toolu_${crypto.randomUUID()}`),
@@ -583,6 +600,8 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
               })
               yield { type: 'block-start', index, blockType: 'tool-call' }
             }
+            // Native Anthropic web_search is a server tool: Factory runs it
+            // in-request. Do not surface it as a DSH tool-call.
           } else if (type === 'content_block_delta') {
             const delta = event.delta
             const index = event.index
@@ -650,7 +669,7 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
           yield { type: 'block-end', index: thinkingBlock.index, block: { type: 'reasoning', text: thinkingBlock.text } }
         }
 
-        if (stopReason === 'tool_use' || toolBlocks.size > 0) {
+        if (toolBlocks.size > 0) {
           yield { type: 'finish', reason: { kind: 'tool-calls' } }
           return
         }

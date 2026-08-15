@@ -12,7 +12,7 @@ import { createFactoryAdapterClass } from './cliproxy/factory-adapter.js'
 import { createFactoryCatalog } from './cliproxy/factory-catalog.js'
 import { createFactoryManager, FACTORY_MODELS } from './cliproxy/factory.js'
 import { registerSubscriptionsWebSearch } from './cliproxy/web-search-router.js'
-import { loadCatalog, listCatalogModels } from './cursor/catalog.js'
+import { loadCatalog, listCanonicalCursorModels } from './cursor/catalog.js'
 import { createSubscriptionsController, registerSubscriptionRoutes } from './cliproxy/routes.js'
 import {
   CPA_PROVIDER_IDS,
@@ -161,13 +161,9 @@ function makeSecretsResolver(ctx, getConf) {
 export function apply(ctx, config = {}) {
   let current = () => config
 
-  const searchControl = {
-    preferred: () => 'grok',
-  }
   const cursor = applyCursor(ctx, {
     llm,
     options: () => cursorOptions(current()),
-    allowNativeSearch: () => searchControl.preferred() === 'cursor',
   })
   void cursor.accounts.list().catch(() => {})
 
@@ -303,13 +299,13 @@ export function apply(ctx, config = {}) {
         if (cursor.accounts.hasUsable()) {
           const picked = await cursor.accounts.pick({ advance: false })
           const catalog = await loadCatalog(picked?.apiKey)
-          const models = listCatalogModels('cursor', catalog)
+          const models = listCanonicalCursorModels(catalog)
           if (models.length > 0) {
             groups.push({
               id: 'cursor',
               label: 'Cursor',
               available: true,
-              models: models.map((model) => ({ id: model.id, name: model.name })),
+              models,
             })
           }
         }
@@ -375,7 +371,6 @@ export function apply(ctx, config = {}) {
     },
     logger: ctx.logger,
   })
-  searchControl.preferred = webSearch.getPreferred
   ctx.inject(['webServer'], (webCtx) => {
     registerSubscriptionRoutes(webCtx, subscriptions, {
       supervisor,

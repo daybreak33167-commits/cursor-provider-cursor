@@ -15,6 +15,7 @@ export const FACTORY_SEARCH_DEFAULT_MODEL = 'claude-sonnet-4-6'
 export const FACTORY_SEARCH_DEFAULT_API_VERSION = '2023-06-01'
 export const FACTORY_SEARCH_DEFAULT_MAX_TOKENS = 4096
 export const FACTORY_SEARCH_DEFAULT_MAX_USES = 5
+const FACTORY_GROK_SEARCH_MAX_TOKENS = 1024
 
 const DROID_SYSTEM_PREFIX = 'You are Droid, an AI software engineering agent built by Factory.\n\n'
 const USER_AGENT = 'factory-cli/0.175.0'
@@ -200,7 +201,8 @@ export function createFactorySearchProvider({ WebError, resolveOptions }) {
           instructions: DROID_SYSTEM_PREFIX,
           input: [{ role: 'user', content: searchUserPrompt(request.query) }],
           tools: [{ type: 'web_search' }],
-          max_output_tokens: options.maxTokens,
+          max_output_tokens: Math.min(options.maxTokens || FACTORY_GROK_SEARCH_MAX_TOKENS, FACTORY_GROK_SEARCH_MAX_TOKENS),
+          reasoning: { effort: 'low' },
         }
         options.recordRequest?.({ endpoint, body })
         let response

@@ -1,9 +1,10 @@
 const DRIVER_PREAMBLE = [
   'You are the model backend for DeepSeek Harness (DSH).',
   'DSH owns the workspace, shell, approvals, and tool execution.',
-  'Call only the tools listed in this request. Do not use Cursor IDE tools,',
+  'Call only the tools listed in this request. Do not use Cursor IDE workspace tools,',
   'do not read or edit files yourself, and do not spawn a nested coding agent.',
-  'When you need information or a side effect, call a listed tool and wait.',
+  'When you need live web information, use Cursor webSearch / webFetch.',
+  'When you need any other information or a side effect, call a listed tool and wait.',
 ].join(' ')
 
 export function flattenText(blocks) {
