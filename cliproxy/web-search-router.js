@@ -9,15 +9,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { importHost } from '../host.js'
-import { factoryUpstreamModelId } from './factory.js'
 import {
   FACTORY_SEARCH_PROVIDER_ID,
+  FACTORY_SEARCH_TOOL_ID,
   createFactorySearchProvider,
   FACTORY_SEARCH_DEFAULT_BASE_URL,
-  FACTORY_SEARCH_DEFAULT_MODEL,
-  FACTORY_SEARCH_DEFAULT_API_VERSION,
-  FACTORY_SEARCH_DEFAULT_MAX_TOKENS,
-  FACTORY_SEARCH_DEFAULT_MAX_USES,
 } from './web-search-factory.js'
 import {
   GROK_SEARCH_PROVIDER_ID,
@@ -42,7 +38,7 @@ const BACKEND_META = {
   },
   [FACTORY_SEARCH_PROVIDER_ID]: {
     label: 'Factory',
-    hint: '需添加 Factory 账号；对话走 Factory Claude/Grok 时由主模型直接调用原生 web_search',
+    hint: '需添加 Factory 账号；走 CLI 同款 /api/tools/web-search，不经过模型',
   },
   'deepseek-official': {
     label: 'DeepSeek',
@@ -117,9 +113,7 @@ function defaultModelFor(provider, groups) {
       ?? models[0].id
   }
   if (provider === FACTORY_SEARCH_PROVIDER_ID) {
-    return models.find((item) => /grok-4\.6/i.test(item.id))?.id
-      ?? models.find((item) => /grok/i.test(item.id))?.id
-      ?? models.find((item) => /sonnet-4-6/i.test(item.id))?.id
+    return models.find((item) => item.id === FACTORY_SEARCH_TOOL_ID)?.id
       ?? models[0].id
   }
   return models[0].id
@@ -365,14 +359,6 @@ export function registerSubscriptionsWebSearch(ctx, deps) {
           resolveApiKey: deps.factory?.resolveApiKey,
           hasCredential: deps.factory?.hasCredential,
           baseURL: deps.factory?.baseURL || FACTORY_SEARCH_DEFAULT_BASE_URL,
-          model: factoryUpstreamModelId(
-            modelForBackend(FACTORY_SEARCH_PROVIDER_ID, modelsCache.groups)
-            || FACTORY_SEARCH_DEFAULT_MODEL,
-          ),
-          apiVersion: deps.factory?.apiVersion || FACTORY_SEARCH_DEFAULT_API_VERSION,
-          maxTokens: deps.factory?.maxTokens || FACTORY_SEARCH_DEFAULT_MAX_TOKENS,
-          maxUses: deps.factory?.maxUses || FACTORY_SEARCH_DEFAULT_MAX_USES,
-          recordRequest: () => {},
         }),
       }),
     )

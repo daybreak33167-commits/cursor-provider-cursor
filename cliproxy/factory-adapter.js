@@ -359,24 +359,35 @@ export function createFactoryAdapterClass({ LlmAdapter, LlmError, CallId, Reason
     }
 
     async * stream(options) {
-      const account = await this.hooks.resolveAccount()
-      if (!account) {
-        throw new LlmError(
-          `未登录 Factory Droid${this.hooks.describeLoginHint?.() ?? '。打开 设置 → 订阅 添加 API Key 或导入 droid CLI'}`,
-          'AUTH',
-        )
+      const tried = []
+      let lastAuth
+      while (true) {
+        const account = await this.hooks.resolveAccount({ exclude: tried })
+        if (!account) {
+          throw lastAuth ?? new LlmError(
+            `未登录 Factory Droid${this.hooks.describeLoginHint?.() ?? '。打开 设置 → 订阅 添加 API Key 或导入 droid CLI'}`,
+            'AUTH',
+          )
+        }
+        tried.push(account.slug, account.email)
+        try {
+          const kind = factoryModelKind(options.model)
+          if (kind === 'openai' || kind === 'xai') {
+            yield* this.streamResponses(options, account, kind === 'xai' ? 'xai' : 'openai')
+            return
+          }
+          if (kind === 'anthropic') {
+            yield* this.streamAnthropic(options, account)
+            return
+          }
+          yield* this.streamChatCompletions(options, account)
+          return
+        } catch (error) {
+          if (!(error instanceof LlmError) || error.code !== 'AUTH') throw error
+          lastAuth = error
+          await this.hooks.markAuthFailed?.(account, error.message)
+        }
       }
-
-      const kind = factoryModelKind(options.model)
-      if (kind === 'openai' || kind === 'xai') {
-        yield* this.streamResponses(options, account, kind === 'xai' ? 'xai' : 'openai')
-        return
-      }
-      if (kind === 'anthropic') {
-        yield* this.streamAnthropic(options, account)
-        return
-      }
-      yield* this.streamChatCompletions(options, account)
     }
 
     makeImageReader(options) {

@@ -69,15 +69,29 @@ function isThinkingEvent(event) {
 // invocations arrive through the in-process execute() callback, and discovery
 // calls are handled inside the SDK.
 const META_TOOL_NAMES = new Set(['mcp', 'getmcptools', 'callmcptool'])
-const WORKSPACE_DENY = ['shell', 'task', 'read', 'edit', 'write', 'delete', 'grep', 'glob']
+// Cursor proto tool ids change across SDK builds. `write` is no longer a
+// valid name (it became piWrite); listing an unknown id makes Agent.send
+// throw, and the GUI then maps that to AUTH.
+const WORKSPACE_DENY = [
+  'shell', 'task', 'read', 'edit', 'delete', 'grep', 'glob', 'ls',
+  'applyAgentDiff', 'semSearch',
+  'piBash', 'piEdit', 'piFind', 'piGrep', 'piLs', 'piRead', 'piWrite',
+  'writeShellStdin',
+]
 
 const DSH_WEB_TOOL_NAMES = new Set(['web_search', 'web_fetch', 'webSearch', 'webFetch'])
 
-function agentToolOptions() {
+function agentToolOptions(extraDeny = []) {
   return {
     tools: ['mcp', 'webSearch', 'webFetch'],
-    disallowedTools: WORKSPACE_DENY,
+    disallowedTools: [...new Set([...WORKSPACE_DENY, ...extraDeny])],
   }
+}
+
+function unknownDisallowedTools(message) {
+  const match = String(message).match(/Unknown tool name\(s\) in `disallowedTools`:\s*([^.]+)/i)
+  if (!match) return []
+  return match[1].split(',').map((name) => name.trim()).filter(Boolean)
 }
 
 function isMetaToolName(name) {
@@ -220,9 +234,16 @@ export class CursorSession {
       this.agent = await Agent.create(createOptions)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const unknown = unknownDisallowedTools(message)
+      if (unknown.length) {
+        createOptions.disallowedTools = (createOptions.disallowedTools ?? [])
+          .filter((name) => !unknown.includes(name))
+        this.agent = await Agent.create(createOptions)
+        return this.agent
+      }
       if (!/tool|disallowed|unknown/i.test(message)) throw error
       createOptions.tools = ['mcp']
-      createOptions.disallowedTools = [...WORKSPACE_DENY, 'webSearch', 'webFetch']
+      createOptions.disallowedTools = agentToolOptions(['webSearch', 'webFetch']).disallowedTools
       this.agent = await Agent.create(createOptions)
     }
     return this.agent
@@ -273,11 +294,10 @@ export class CursorSession {
     this.emitted = false
     this.streamedText = ''
     this.streamedReasoning = ''
-    const toolOpts = agentToolOptions()
-    this.run = await agent.send(images?.length ? { text: prompt, images } : prompt, {
+    const sendOnce = async (disallowedTools) => agent.send(images?.length ? { text: prompt, images } : prompt, {
       model: this.modelSelection,
-      tools: toolOpts.tools,
-      disallowedTools: toolOpts.disallowedTools,
+      tools: agentToolOptions().tools,
+      disallowedTools,
       onDelta: (args) => this.enqueueDelta(args),
       local: {
         cwd: SCRATCH,
@@ -285,6 +305,14 @@ export class CursorSession {
         customTools: this.customTools(tools),
       },
     })
+    const deny = agentToolOptions().disallowedTools
+    try {
+      this.run = await sendOnce(deny)
+    } catch (error) {
+      const unknown = unknownDisallowedTools(error instanceof Error ? error.message : String(error))
+      if (!unknown.length) throw error
+      this.run = await sendOnce(deny.filter((name) => !unknown.includes(name)))
+    }
     this.iterator = typeof this.run.stream === 'function'
       ? this.run.stream()[Symbol.asyncIterator]()
       : undefined

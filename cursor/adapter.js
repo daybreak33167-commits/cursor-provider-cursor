@@ -191,7 +191,13 @@ export function createCursorAdapterClass({ LlmAdapter, LlmError, CallId, Reasoni
         }
         if (error instanceof LlmError) throw error
         const message = error instanceof Error ? error.message : String(error)
-        const code = /401|403|auth|api key/i.test(message) ? 'AUTH' : 'TRANSPORT'
+        const name = error && typeof error === 'object' ? String(error.name ?? '') : ''
+        const toolComplaint = /unknown tool|disallowedTools/i.test(message)
+        const authNamed = /AuthenticationError|AuthError/i.test(name)
+        const authText = /\b401\b|\b403\b|unauthorized|authentication|api[_ ]?key/i.test(message)
+        // Do not match the substring "auth" — Cursor's valid-tool list includes
+        // "aiAttribution", which used to make every tool error look like AUTH.
+        const code = !toolComplaint && (authNamed || authText) ? 'AUTH' : 'TRANSPORT'
         // Cool the failing account down so the retry rotates to another one.
         if (code === 'AUTH') this.hooks.reportAuthFailure?.(apiKey)
         throw new LlmError(`Cursor SDK stream failed: ${message}`, code, { cause: error })

@@ -508,9 +508,24 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
   }
 
   /** Async: first active account (for request headers / session ids). */
-  async function resolveAccount() {
+  async function resolveAccount({ exclude } = {}) {
     await load()
-    return activeAccounts()[0]
+    const skip = new Set(exclude ?? [])
+    return activeAccounts().find((account) => !skip.has(account.slug) && !skip.has(account.email))
+  }
+
+  async function markAuthFailed(account, detail) {
+    if (!account) return
+    await load()
+    const hit = (cache ?? []).find((item) => item.slug === account.slug)
+    if (!hit) return
+    const message = String(detail ?? 'AUTH').slice(0, 240)
+    hit.lastError = message
+    if (/deactivated|invalid api key|unauthorized/i.test(message)) {
+      hit.disabled = true
+    }
+    await persist()
+    markChanged()
   }
 
   function requestHeaders(account, apiProvider) {
@@ -757,6 +772,7 @@ export function createFactoryManager({ getCredentials, mgmt, proxyStatus, onChan
     hasActiveBearer,
     resolveBearer,
     resolveAccount,
+    markAuthFailed,
     requestHeaders,
   }
 }

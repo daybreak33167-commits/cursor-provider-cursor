@@ -10,7 +10,8 @@ import { createProxyCatalog } from './cliproxy/catalog.js'
 import { createProxyAdapterClass } from './cliproxy/adapter.js'
 import { createFactoryAdapterClass } from './cliproxy/factory-adapter.js'
 import { createFactoryCatalog } from './cliproxy/factory-catalog.js'
-import { createFactoryManager, FACTORY_MODELS } from './cliproxy/factory.js'
+import { createFactoryManager } from './cliproxy/factory.js'
+import { FACTORY_SEARCH_TOOL_ID } from './cliproxy/web-search-factory.js'
 import { registerSubscriptionsWebSearch } from './cliproxy/web-search-router.js'
 import { loadCatalog, listCanonicalCursorModels } from './cursor/catalog.js'
 import { createSubscriptionsController, registerSubscriptionRoutes } from './cliproxy/routes.js'
@@ -223,7 +224,8 @@ export function apply(ctx, config = {}) {
 
   const factoryAdapter = new FactoryAdapter({
     catalog: factoryCatalog,
-    resolveAccount: () => factory.resolveAccount(),
+    resolveAccount: (opts) => factory.resolveAccount(opts),
+    markAuthFailed: (account, detail) => factory.markAuthFailed(account, detail),
     requestHeaders: (account, apiProvider) => factory.requestHeaders(account, apiProvider),
     retryPolicy: () => proxyConf().retryPolicy,
     resolveAttachments: () => ctx.get?.('attachments'),
@@ -315,16 +317,7 @@ export function apply(ctx, config = {}) {
           id: 'factory',
           label: 'Factory',
           available: true,
-          models: [
-            ...FACTORY_MODELS.xai.map((model) => ({
-              id: model.name,
-              name: model.display,
-            })),
-            ...FACTORY_MODELS.anthropic.map((model) => ({
-              id: model.name,
-              name: model.display,
-            })),
-          ],
+          models: [{ id: FACTORY_SEARCH_TOOL_ID, name: 'Factory WebSearch' }],
         })
       }
       return groups
